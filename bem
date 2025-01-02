@@ -1,0 +1,188 @@
+#!/bin/bash
+
+BEM_ROOT_DIR="~/.bem"
+PLUG_IN_DIR="$BEM_ROOT_DIR/plugins"
+CONFIG_FILE="$BEM_ROOT_DIR/bem.conf"
+
+usage() {
+    echo "Usage: bem <command>"
+    echo "commands:"
+    echo "  install <file>                          Install a new plugin"
+    echo "  enable <plug-in_1, plug-in_2, ...>      Enable plugins"
+    echo "  disable <plugin_1, plug-in_2, ...>      Disable plugins"
+    echo "  list                                    List all plugins and their status"
+    echo "  remove <plugin_1, plug-in_2, ...>       Remove plugins"
+    echo "  update <plugin_1, plug-in_2, ...>       Update plugins"
+    echo "  update                                  Update all plugins"
+    echo "  init                                    Install or update bem"
+    echo "  help <plugin_1, plug-in_2, ...>         Print docs/infos about plugins"
+    echo "  help                Print this message"
+}
+
+help(){
+    if [[ -z $1 ]]; then
+        usage
+    else
+        for name in $@; do
+            if grep -q "^$name=" "$CONFIG_FILE"; then
+                pidir = "$PLUG_IN_DIR/$name"
+                if [[ -d pidir ]]; then
+                    docfile =
+                    for docs in "$pidir"/{*.txt,*.md,readme,ReadMe,README}; do
+                        docfile = $docs
+                    done
+                    if [[ -z docfile ]]; then
+                        echo "Can't find any documentation for '$name'." >&2
+                    else
+                        ${PAGER:-less} "$docfile"
+                    fi
+                else
+                    echo "Error: '$name' present in '$CONFIG_FILE' but can't find the source in '$BEM_ROOT_DIR'." >&2
+                fi
+            else
+                echo "Error: '$name' not found in '$CONFIG_FILE'." >&2
+            fi
+        done
+    fi
+}
+
+init(){
+    mkdir -p "$BEM_ROOT_DIR"
+    mkdir -p "$PLUG_IN_DIR"
+    touch "$CONFIG_FILE"
+    ln "$BASH_SOURCE" "$BEM_ROOT_DIR/bem"
+}
+
+enable() {
+    if [[ -z $1 ]]; then
+        usage >&2
+    else
+        for name in $@; do
+            if grep -q "^$name=" "$CONFIG_FILE"; then
+                sed -i "s/^$name=.*/$name=enable/" "$CONFIG_FILE"
+                mv "$PLUG_IN_DIR/${name}_disabled" "$PLUG_IN_DIR/$name"
+                source "$PLUG_IN_DIR/$name"
+                echo "'$name' enabled."
+            else
+                echo "Error: '$name' not found."
+            fi
+        done;
+    fi
+}
+
+
+disable() {
+    if [[ -z $1 ]]; then
+        usage >&2
+    else
+        for name in $@; do
+            if grep -q "^$name=" "$CONFIG_FILE"; then
+                sed -i "s/^$name=.*/$name=disable/" "$CONFIG_FILE"
+                mv "$PLUG_IN_DIR/$name" "$PLUG_IN_DIR/${name}_disabled"
+                echo "'$name' disabled."
+            else
+                echo "Error: '$name' not found."
+            fi
+        done;
+    fi
+}
+
+list() {
+    while IFS= read -r line; do
+        local plugin_name status
+        plugin_name=$(echo "$line" | cut -d= -f1)
+        status=$(echo "$line" | cut -d= -f2)
+        echo "  $plugin_name ($status)"
+    done < "$CONFIG_FILE"
+}
+
+remove() {
+    if [[ -z $1 ]]; then
+        usage >&2
+    else
+        for name in $@; do
+            if grep -q "^$name=" "$CONFIG_FILE"; then
+                sed -i "/^$name=/d" "$CONFIG_FILE"
+                rm -f "$PLUG_IN_DIR/$name"
+                echo "'$name' removed."
+            else
+                echo "Error: '$name' not found."
+            fi
+        done;
+    fi
+}
+
+install(){
+    for file in $@; do
+        if [[ -f "$file" ]]; then
+            local name
+            name=$(basename "$file")
+            if [[ -f "$PLUG_IN_DIR/$name" ]]; then
+                echo "Error: a script named '$name' already exist."
+                exit 1
+            else
+                ln -s "$file" "$PLUG_IN_DIR/"
+                chmod +x "$PLUG_IN_DIR/$name"
+                echo "$name=disabled" >> "$CONFIG_FILE"
+                echo "'$name' installed."
+            fi
+        else
+            echo "Error: file '$file' not found." >&2
+        fi
+    done;
+}
+
+update(){
+    echo "TODO!" >&2
+}
+
+source_bem() {
+    local plugin status
+    while IFS='=' read -r plugin status; do
+        if [[ $status == "enabled"]]; then
+            for file in "$PLUG_IN_DIR/$plugin/*.bash"; do
+            if [[ -f $f ]]; then
+                source "$PLUG_IN_DIR/$plugin/file"
+            fi
+            done
+        fi
+    done < ~/.bash_plugins/config
+}
+
+if (return 2>/dev/null); then
+    alias bem="$BEM_ROOT_DIR/bem"
+    source_bem
+else
+
+    shift
+
+    case "$0" in
+        install)
+            install "$@"
+            ;;
+        enable)
+            enable "$@"
+            ;;
+        disable)
+            disable "$@"
+            ;;
+        list | ls)
+            list
+            ;;
+        remove | rm)
+            remove "$@"
+            ;;
+        update)
+            update "$@"
+            ;;
+        init)
+            init
+            ;;
+        help | -h | h)
+            help "$@"
+            ;;
+        *)
+            usage >&2
+            ;;
+    esac
+fi
