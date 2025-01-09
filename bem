@@ -1,188 +1,251 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-BEM_ROOT_DIR="~/.bem"
+BEM_ROOT_DIR="${HOME}/.bem"
 PLUG_IN_DIR="$BEM_ROOT_DIR/plugins"
 CONFIG_FILE="$BEM_ROOT_DIR/bem.conf"
 
-usage() {
-    echo "Usage: bem <command>"
-    echo "commands:"
-    echo "  install <file>                          Install a new plugin"
-    echo "  enable <plug-in_1, plug-in_2, ...>      Enable plugins"
-    echo "  disable <plugin_1, plug-in_2, ...>      Disable plugins"
-    echo "  list                                    List all plugins and their status"
-    echo "  remove <plugin_1, plug-in_2, ...>       Remove plugins"
-    echo "  update <plugin_1, plug-in_2, ...>       Update plugins"
-    echo "  update                                  Update all plugins"
-    echo "  init                                    Install or update bem"
-    echo "  help <plugin_1, plug-in_2, ...>         Print docs/infos about plugins"
-    echo "  help                Print this message"
+init() {
+    mkdir -p "$BEM_ROOT_DIR" "$PLUG_IN_DIR" || exit 1
+    touch "$CONFIG_FILE" || exit 1
+    echo "BEM initialized at $BEM_ROOT_DIR."
+    local bashrc="${HOME}/.bashrc"
+    local script_path
+    script_path=$(realpath "${BASH_SOURCE[0]}")
+    local bem_source="source $script_path"
+    if ! grep -Fxq "$bem_source" "$bashrc"; then
+        echo "$bem_source" >> "$bashrc"
+        echo "Added 'source $script_path/bem' to $bashrc."
+        echo "Type: 'exec bash' to apply changes."
+    else
+        echo "'source $script_path/bem' is already present in $bashrc."
+    fi
 }
 
-help(){
+usage() {
+    cat << EOF
+Usage: bem <command>
+commands:
+  install <file|directory>...                Install new plugins
+  enable <plugin_1 plugin_2 ...>             Enable plugins
+  disable <plugin_1 plugin_2 ...>            Disable plugins
+  list                                       List all plugins and their status
+  remove <plugin_1 plugin_2 ...>             Remove plugins
+  update <plugin_1 plugin_2 ...>             Update specific plugins
+  updateall                                  Update all plugins
+  init                                       Initialize bem environment
+  help <plugin_1 plugin_2 ...>               Show docs/infos about plugins
+  help                                       Show this message
+EOF
+}
+
+help() {
     if [[ -z $1 ]]; then
         usage
     else
-        for name in $@; do
+        for name in "$@"; do
             if grep -q "^$name=" "$CONFIG_FILE"; then
-                pidir = "$PLUG_IN_DIR/$name"
-                if [[ -d pidir ]]; then
-                    docfile =
-                    for docs in "$pidir"/{*.txt,*.md,readme,ReadMe,README}; do
-                        docfile = $docs
+                local plugin_dir="$PLUG_IN_DIR/$name"
+                if [[ -d "$plugin_dir" ]]; then
+                    local doc_file=""
+                    for docs in "$plugin_dir"/{*.txt,*.md,README,README.md}; do
+                        if [[ -f "$docs" ]]; then
+                            doc_file="$docs"
+                            break
+                        fi
                     done
-                    if [[ -z docfile ]]; then
-                        echo "Can't find any documentation for '$name'." >&2
+                    if [[ -n $doc_file ]]; then
+                        ${PAGER:-less} "$doc_file"
                     else
-                        ${PAGER:-less} "$docfile"
+                        echo "No documentation found for '$name'."
                     fi
                 else
-                    echo "Error: '$name' present in '$CONFIG_FILE' but can't find the source in '$BEM_ROOT_DIR'." >&2
+                    echo "Error: Plugin '$name' not found in $PLUG_IN_DIR."
                 fi
             else
-                echo "Error: '$name' not found in '$CONFIG_FILE'." >&2
+                echo "Error: Plugin '$name' not found in $CONFIG_FILE."
             fi
         done
     fi
 }
 
-init(){
-    mkdir -p "$BEM_ROOT_DIR"
-    mkdir -p "$PLUG_IN_DIR"
-    touch "$CONFIG_FILE"
-    ln "$BASH_SOURCE" "$BEM_ROOT_DIR/bem"
+is_git_repo() {
+    local dir="$1"
+    [[ -d "$dir/.git" ]]
 }
 
-enable() {
-    if [[ -z $1 ]]; then
-        usage >&2
-    else
-        for name in $@; do
-            if grep -q "^$name=" "$CONFIG_FILE"; then
-                sed -i "s/^$name=.*/$name=enable/" "$CONFIG_FILE"
-                mv "$PLUG_IN_DIR/${name}_disabled" "$PLUG_IN_DIR/$name"
-                source "$PLUG_IN_DIR/$name"
-                echo "'$name' enabled."
-            else
-                echo "Error: '$name' not found."
-            fi
-        done;
-    fi
+error_exit() {
+    echo "${1}" >&2
+    exit 1
 }
 
-
-disable() {
-    if [[ -z $1 ]]; then
-        usage >&2
-    else
-        for name in $@; do
+install() {
+    for path in "$@"; do
+        if [[ -f "$path" ]]; then
+            local name=$(basename "$path" | sed 's/\.[^.]*$//')
             if grep -q "^$name=" "$CONFIG_FILE"; then
-                sed -i "s/^$name=.*/$name=disable/" "$CONFIG_FILE"
-                mv "$PLUG_IN_DIR/$name" "$PLUG_IN_DIR/${name}_disabled"
-                echo "'$name' disabled."
-            else
-                echo "Error: '$name' not found."
+                echo "Error: Plugin '$name' already exists." >&2
+                continue
             fi
-        done;
-    fi
+
+            mkdir -p "$PLUG_IN_DIR/$name"
+            ln -s "$(realpath "$path")" "$PLUG_IN_DIR/$name/"
+            local is_repo=$(is_git_repo "$(dirname "$path")" && echo "yes" || echo "no")
+            echo "$name=disabled;path=$(realpath "$path");repo=$is_repo" >> "$CONFIG_FILE"
+            echo "Installed '$name'."
+
+        elif [[ -d "$path" ]]; then
+            local name=$(basename "$path")
+            if grep -q "^$name=" "$CONFIG_FILE"; then
+                echo "Error: Plugin '$name' already exists." >&2
+                continue
+            fi
+
+            mkdir -p "$PLUG_IN_DIR/$name"
+            ln -s "$path" "$PLUG_IN_DIR/$name"
+            local is_repo=$(is_git_repo "$path" && echo "yes" || echo "no")
+            echo "$name=disabled;path=$(realpath "$path");repo=$is_repo" >> "$CONFIG_FILE"
+            echo "Installed '$name'."
+
+        else
+            error_exit "Error: '$path' is neither a valid file nor directory."
+        fi
+    done
 }
 
 list() {
     while IFS= read -r line; do
-        local plugin_name status
-        plugin_name=$(echo "$line" | cut -d= -f1)
-        status=$(echo "$line" | cut -d= -f2)
-        echo "  $plugin_name ($status)"
+        local name status path repo
+        name=$(cut -d';' -f1 <<< "$line" | cut -d'=' -f1)
+        status=$(cut -d';' -f1 <<< "$line" | cut -d'=' -f2)
+        path=$(cut -d';' -f2 <<< "$line" | cut -d'=' -f2)
+        repo=$(cut -d';' -f3 <<< "$line" | cut -d'=' -f2)
+        echo "$name ($status) [path: $path, repo: $repo]"
+    done < "$CONFIG_FILE"
+}
+
+update() {
+    for plugin in "$@"; do
+        if grep -q "^$plugin=" "$CONFIG_FILE"; then
+            local path=$(grep "^$plugin=" "$CONFIG_FILE" | cut -d';' -f2 | cut -d'=' -f2)
+            local repo=$(grep "^$plugin=" "$CONFIG_FILE" | cut -d';' -f3 | cut -d'=' -f2)
+            if [[ "$repo" == "yes" ]]; then
+                pushd "$path" >/dev/null || error_exit "Error: Could not access path for '$plugin'."
+                git pull || error_exit "Error: Failed to update '$plugin'."
+                popd >/dev/null
+                echo "Updated '$plugin'."
+            else
+                echo "Error: '$plugin' is not a Git repository." >&2
+            fi
+        else
+            echo "Error: Plugin '$plugin' not found in configuration." >&2
+        fi
+    done
+}
+
+updateall() {
+    while IFS= read -r line; do
+        local name=$(cut -d';' -f1 <<< "$line" | cut -d'=' -f1)
+        local path=$(cut -d';' -f2 <<< "$line" | cut -d'=' -f2)
+        local repo=$(cut -d';' -f3 <<< "$line" | cut -d'=' -f2)
+        if [[ "$repo" == "yes" ]]; then
+            pushd "$path" >/dev/null || error_exit "Error: Could not access path for '$name'."
+            git pull || error_exit "Error: Failed to update '$name'."
+            popd >/dev/null
+            echo "Updated '$name'."
+        fi
     done < "$CONFIG_FILE"
 }
 
 remove() {
-    if [[ -z $1 ]]; then
-        usage >&2
-    else
-        for name in $@; do
-            if grep -q "^$name=" "$CONFIG_FILE"; then
-                sed -i "/^$name=/d" "$CONFIG_FILE"
-                rm -f "$PLUG_IN_DIR/$name"
-                echo "'$name' removed."
-            else
-                echo "Error: '$name' not found."
-            fi
-        done;
-    fi
-}
-
-install(){
-    for file in $@; do
-        if [[ -f "$file" ]]; then
-            local name
-            name=$(basename "$file")
-            if [[ -f "$PLUG_IN_DIR/$name" ]]; then
-                echo "Error: a script named '$name' already exist."
-                exit 1
-            else
-                ln -s "$file" "$PLUG_IN_DIR/"
-                chmod +x "$PLUG_IN_DIR/$name"
-                echo "$name=disabled" >> "$CONFIG_FILE"
-                echo "'$name' installed."
-            fi
+    for plugin in "$@"; do
+        if grep -q "^$plugin=" "$CONFIG_FILE"; then
+            sed -i "/^$plugin=/d" "$CONFIG_FILE"
+            rm -rf "$PLUG_IN_DIR/$plugin"
+            echo "Removed '$plugin'."
         else
-            echo "Error: file '$file' not found." >&2
+            echo "Error: Plugin '$plugin' not found in configuration." >&2
         fi
-    done;
+    done
 }
 
-update(){
-    echo "TODO!" >&2
+enable() {
+    for plugin in "$@"; do
+        if grep -q "^$plugin=" "$CONFIG_FILE"; then
+            sed -i "s/^$plugin=disabled/$plugin=enabled/" "$CONFIG_FILE"
+            source "$PLUG_IN_DIR/$plugin"/*.sh 2>/dev/null || {
+                echo "Error: Failed to source '$plugin'." >&2
+                continue
+            }
+            echo "Enabled '$plugin'."
+            echo "Type: 'exec bash' to apply changes."
+        else
+            echo "Error: Plugin '$plugin' not found in configuration." >&2
+        fi
+    done
+}
+
+disable() {
+    for plugin in "$@"; do
+        if grep -q "^$plugin=" "$CONFIG_FILE"; then
+            sed -i "s/^$plugin=enabled/$plugin=disabled/" "$CONFIG_FILE"
+            echo "Disabled '$plugin'."
+            echo "Type: 'exec bash' to apply changes."
+        else
+            echo "Error: Plugin '$plugin' not found in configuration." >&2
+        fi
+    done
 }
 
 source_bem() {
-    local plugin status
-    while IFS='=' read -r plugin status; do
-        if [[ $status == "enabled"]]; then
-            for file in "$PLUG_IN_DIR/$plugin/*.bash"; do
-            if [[ -f $f ]]; then
-                source "$PLUG_IN_DIR/$plugin/file"
-            fi
+    while IFS=';' read -r line; do
+        local plugin=$(cut -d'=' -f1 <<< "$line")
+        local status=$(cut -d';' -f1 <<< "$line" | cut -d'=' -f2)
+        if [[ $status == "enabled" ]]; then
+            for file in "$PLUG_IN_DIR/$plugin"/*.sh; do
+                if [[ -f $file ]]; then
+                    source "$file"
+                fi
             done
         fi
-    done < ~/.bash_plugins/config
+    done < "$CONFIG_FILE"
 }
 
 if (return 2>/dev/null); then
     alias bem="$BEM_ROOT_DIR/bem"
     source_bem
-else
-
-    shift
-
-    case "$0" in
-        install)
-            install "$@"
-            ;;
-        enable)
-            enable "$@"
-            ;;
-        disable)
-            disable "$@"
-            ;;
-        list | ls)
-            list
-            ;;
-        remove | rm)
-            remove "$@"
-            ;;
-        update)
-            update "$@"
-            ;;
-        init)
-            init
-            ;;
-        help | -h | h)
-            help "$@"
-            ;;
-        *)
-            usage >&2
-            ;;
-    esac
 fi
+
+command="$1"
+shift
+case "$command" in
+    install)
+        install "$@"
+        ;;
+    enable)
+        enable "$@"
+        ;;
+    disable)
+        disable "$@"
+        ;;
+    list|ls)
+        list
+        ;;
+    remove|rm)
+        remove "$@"
+        ;;
+    update)
+        update "$@"
+        ;;
+    updateall)
+        updateall
+        ;;
+    init)
+        init
+        ;;
+    help|-h|h)
+        help "$@"
+        ;;
+    *)
+        usage >&2
+        ;;
+esac
