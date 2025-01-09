@@ -213,39 +213,39 @@ source_bem() {
 if (return 2>/dev/null); then
     alias bem="$BEM_ROOT_DIR/bem"
     source_bem
+else
+    command="$1"
+    shift
+    case "$command" in
+        install)
+            install "$@"
+            ;;
+        enable)
+            enable "$@"
+            ;;
+        disable)
+            disable "$@"
+            ;;
+        list|ls)
+            list
+            ;;
+        remove|rm)
+            remove "$@"
+            ;;
+        update)
+            update "$@"
+            ;;
+        updateall)
+            updateall
+            ;;
+        init)
+            init
+            ;;
+        help|-h|h)
+            help "$@"
+            ;;
+        *)
+            usage >&2
+            ;;
+    esac
 fi
-
-command="$1"
-shift
-case "$command" in
-    install)
-        install "$@"
-        ;;
-    enable)
-        enable "$@"
-        ;;
-    disable)
-        disable "$@"
-        ;;
-    list|ls)
-        list
-        ;;
-    remove|rm)
-        remove "$@"
-        ;;
-    update)
-        update "$@"
-        ;;
-    updateall)
-        updateall
-        ;;
-    init)
-        init
-        ;;
-    help|-h|h)
-        help "$@"
-        ;;
-    *)
-        usage >&2
-        ;;
-esac
