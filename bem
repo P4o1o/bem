@@ -11,10 +11,10 @@ init() {
     local bashrc="${HOME}/.bashrc"
     local script_path
     script_path=$(realpath "${BASH_SOURCE[0]}")
-    local bem_source="source $script_path"
+    local bem_source="alias bem=$script_path"
     if ! grep -Fxq "$bem_source" "$bashrc"; then
         echo "$bem_source" >> "$bashrc"
-        echo "Added 'source $script_path/bem' to $bashrc."
+        echo "Added '$script_path/bem' to $bashrc. as bem"
         echo "Type: 'exec bash' to apply changes."
     else
         echo "'source $script_path/bem' is already present in $bashrc."
@@ -211,7 +211,6 @@ source_bem() {
 }
 
 if (return 2>/dev/null); then
-    alias bem="$BEM_ROOT_DIR/bem"
     source_bem
 else
     command="$1"
