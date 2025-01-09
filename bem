@@ -11,7 +11,7 @@ init() {
     local bashrc="${HOME}/.bashrc"
     local script_path
     script_path=$(realpath "${BASH_SOURCE[0]}")
-    local bem_source="alias bem=$script_path"
+    local bem_source="alias bem=/'$script_path/'"
     if ! grep -Fxq "$bem_source" "$bashrc"; then
         echo "$bem_source" >> "$bashrc"
         echo "Added '$script_path/bem' to $bashrc. as bem"
