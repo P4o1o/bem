@@ -1,47 +1,51 @@
 #!/usr/bin/env bash
 
 usage() {
-    cat <<-"EOF"
-Usage: bem <command>
+    local green=$(tput setaf 40 2>/dev/null)
+    local resetc=$(tput sgr0 2>/dev/null)
+    local sky=$(tput setaf 38 2>/dev/null)
+    local yellow=$(tput setaf 227 2>/dev/null)
+    cat <<EOF
+Usage: ${green}bem${sky} <command>${resetc}
 
 Available commands:
-  install [-option arg] <file> [-option arg] <file> ...
+  ${sky}install${yellow} [-option arg] <file> [-option arg] <file> ...${resetc}
       Install new plugins.
       Options:
         -n <name>   Specify a custom name for the file alias in the shell
                     (defaults to the filename).
 
-  enable <plugin_name1 plugin_name2 ...>             
+  ${sky}enable${yellow} <plugin_name1 plugin_name2 ...>${resetc}             
       Enable specified plugins.
 
-  disable <plugin_name1 plugin_name2 ...>            
+  ${sky}disable${yellow} <plugin_name1 plugin_name2 ...>${resetc}            
       Disable specified plugins.
 
-  list                                       
+  ${sky}list${resetc}                                       
       List all plugins and their current status.
 
-  remove [-option arg] <plugin_name1 plugin_name2 ...> 
+  ${sky}remove${yellow} [-option arg] <plugin_name1 plugin_name2 ...>${resetc}
       Remove specified plugins.
       Options:
         -A           Remove also the original file of the plugin.
         -f           Force removal without any prompts.
 
-  update <plugin_name1 plugin_name2 ...>             
+  ${sky}update${yellow} <plugin_name1 plugin_name2 ...>${resetc}          
       Update specific plugins.
 
-  update-all                                  
+  ${sky}update-all${resetc}                                  
       Update all plugins that are inside a Git repository.
 
-  self-update                                
+  ${sky}self-update${resetc}                                
       Update the `bem` tool itself using Git.
 
-  init                                      
+  ${sky}init${resetc}                                      
       Initialize the `bem` environment.
 
-  help <plugin_name1 plugin_name2 ...>              
+  ${sky}help${yellow} <plugin_name1 plugin_name2 ...>${resetc}            
       Show documentation or additional information for specific plugins.
 
-  help                                      
+  ${sky}help${resetc}                                      
       Display this usage message.
 EOF
 }
@@ -56,6 +60,28 @@ init() {
     local bem_alias="alias bem='$script_path'"
     echo "$bem_alias" >> ~/.bem/bem_source.bash
     sourcedcode=$(cat <<-"EOF"
+    _bem_autocomplete(){
+        local cur prev opts
+        cur="${COMP_WORDS[COMP_CWORD]}"
+        prev="${COMP_WORDS[COMP_CWORD-1]}"
+        opts="install enable disable list remove update update-all self-update init help"
+
+        case "$prev" in
+            install)
+                COMPREPLY=( $(compgen -W "$(printf "%s\n" ./*)" -- "$cur") )
+                return 0
+                ;;
+            enable|disable|remove|help|update)
+                COMPREPLY=( $(compgen -W "$(cut -c1-35 ~/.bem/aliaslist.bin | sed 's/ *$//')" -- "$cur") )
+                return 0
+                ;;
+            *)
+                COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
+                return 0
+                ;;
+        esac
+    }
+    complete -F _bem_autocomplete bem
     while IFS= read -r line; do
         _plugin_name="${line:0:35}"
         _plugin_name="${_plugin_name// /}"
@@ -67,15 +93,13 @@ init() {
 EOF
 )
     echo "$sourcedcode" >> ~/.bem/bem_source.bash
-    echo "BEM initialized at ~/.bem."
+    echo "$(tput setaf 40 2>/dev/null)BEM$(tput sgr0 2>/dev/null) initialized at ~/.bem."
     local bem_source="source ~/.bem/bem_source.bash"
     if ! grep -Fxq "$bem_source" ~/.bashrc; then
         echo "$bem_source" >> ~/.bashrc
         echo "Linked to ~/.bashrc."
-        echo "Type: 'exec bash' to apply changes."
-    else
-        echo "line 'source ~/.bem/bem_source.bash' already present in ~/.bashrc."
     fi
+    echo "Type: 'exec bash' to apply changes."
 }
 
 list() {
@@ -112,7 +136,7 @@ update() {
                     popd >/dev/null
                     echo "Updated '$name'."
                 else
-                    echo "Error: '$main_dir' is not a Git repository." >&2
+                    echo "$(tput setaf 1 2>/dev/null)Error: '$main_dir' is not a Git repository.$(tput sgr0 2>/dev/null)" >&2
                 fi
             fi
         done;
@@ -165,10 +189,10 @@ help() {
                         if [[ -n $doc_file ]]; then
                             ${PAGER:-less} "$doc_file"
                         else
-                            echo "No documentation found for '$name'." >&2
+                            echo "$(tput setaf 1 2>/dev/null)No documentation found for '$name'.$(tput sgr0 2>/dev/null)" >&2
                         fi
                     else
-                        echo "Error: Plugin '$name' path: '$plugin_dir' is not a valid directory." >&2
+                        echo "$(tput setaf 1 2>/dev/null)Error: Plugin '$name' path: '$plugin_dir' is not a valid directory.$(tput sgr0 2>/dev/null)" >&2
                     fi
                 fi
             done;
@@ -181,7 +205,7 @@ enable() {
             echo "Enabled '$plugin'."
             echo "Type: 'exec bash' to apply changes."
         else
-            echo "'$plugin' not found in ~/.bem/aliaslist.bin" >&2
+            echo "$(tput setaf 1 2>/dev/null)'$plugin' not found in ~/.bem/aliaslist.bin$(tput sgr0 2>/dev/null)" >&2
         fi
     done
 }
@@ -192,13 +216,13 @@ disable() {
             echo "Disabled '$plugin'."
             echo "Type: 'exec bash' to apply changes."
         else
-            echo "'$plugin' not found in ~/.bem/aliaslist.bin" >&2
+            echo "$(tput setaf 1 2>/dev/null)'$plugin' not found in ~/.bem/aliaslist.bin$(tput sgr0 2>/dev/null)" >&2
         fi
     done
 }
 
 error_exit() {
-    echo "${1}" >&2
+    echo "$(tput setaf 1 2>/dev/null)${1}$(tput sgr0 2>/dev/null)" >&2
     exit 1
 }
 
@@ -207,9 +231,8 @@ install() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -n)
-                # Se -n è seguito da un argomento, impostiamo il nome personalizzato
                 custom_name="$2"
-                shift 2  # Sposta avanti di due posizioni, saltando l'opzione e il suo argomento
+                shift 2
                 ;;
             *)
                 path=$1
@@ -260,12 +283,11 @@ remove() {
         if sed -i "/^$plugin /d" ~/.bem/aliaslist.bin; then
             echo "Removed '$plugin'."
         else
-            echo "Error: Plugin '$plugin' not found." >&2
+            echo "$(tput setaf 2 2>/dev/null)Error: Plugin '$plugin' not found.$(tput sgr0 2>/dev/null)" >&2
         fi
     done
     echo "Type: 'exec bash' to apply changes."
 }
-
 
 if [[ $# -lt 1 ]]; then
     usage
@@ -292,7 +314,7 @@ else
             fi
             ;;
         *) 
-            echo "Unknown command: $command"
+            echo "$(tput setaf 2 2>/dev/null)Unknown command: $command$(tput sgr0 2>/dev/null)"
             usage
             exit 1
             ;;
