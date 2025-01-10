@@ -1,76 +1,197 @@
 #!/usr/bin/env bash
 
-BEM_ROOT_DIR="${HOME}/.bem"
-PLUG_IN_DIR="$BEM_ROOT_DIR/plugins"
-CONFIG_FILE="$BEM_ROOT_DIR/bem.conf"
-
-init() {
-    mkdir -p "$BEM_ROOT_DIR" "$PLUG_IN_DIR" || exit 1
-    touch "$CONFIG_FILE" || exit 1
-    echo "BEM initialized at $BEM_ROOT_DIR."
-    local bashrc="${HOME}/.bashrc"
-    local script_path
-    script_path=$(realpath "${BASH_SOURCE[0]}")
-    local bem_source="alias bem='$script_path'"
-    if ! grep -Fxq "$bem_source" "$bashrc"; then
-        echo "$bem_source" >> "$bashrc"
-        echo "Added '$script_path/bem' to $bashrc. as bem"
-        echo "Type: 'exec bash' to apply changes."
-    else
-        echo "'source $script_path/bem' is already present in $bashrc."
-    fi
-}
-
 usage() {
-    cat << EOF
+    cat <<-"EOF"
 Usage: bem <command>
-commands:
-  install <file|directory>...                Install new plugins
-  enable <plugin_1 plugin_2 ...>             Enable plugins
-  disable <plugin_1 plugin_2 ...>            Disable plugins
-  list                                       List all plugins and their status
-  remove <plugin_1 plugin_2 ...>             Remove plugins
-  update <plugin_1 plugin_2 ...>             Update specific plugins
-  updateall                                  Update all plugins
-  init                                       Initialize bem environment
-  help <plugin_1 plugin_2 ...>               Show docs/infos about plugins
-  help                                       Show this message
+
+Available commands:
+  install [-option arg] <file> [-option arg] <file> ...
+      Install new plugins.
+      Options:
+        -n <name>   Specify a custom name for the file alias in the shell
+                    (defaults to the filename).
+
+  enable <plugin_name1 plugin_name2 ...>             
+      Enable specified plugins.
+
+  disable <plugin_name1 plugin_name2 ...>            
+      Disable specified plugins.
+
+  list                                       
+      List all plugins and their current status.
+
+  remove [-option arg] <plugin_name1 plugin_name2 ...> 
+      Remove specified plugins.
+      Options:
+        -A           Remove also the original file of the plugin.
+        -f           Force removal without any prompts.
+
+  update <plugin_name1 plugin_name2 ...>             
+      Update specific plugins.
+
+  update-all                                  
+      Update all plugins that are inside a Git repository.
+
+  self-update                                
+      Update the `bem` tool itself using Git.
+
+  init                                      
+      Initialize the `bem` environment.
+
+  help <plugin_name1 plugin_name2 ...>              
+      Show documentation or additional information for specific plugins.
+
+  help                                      
+      Display this usage message.
 EOF
 }
 
-help() {
-    if [[ -z $1 ]]; then
-        usage
+init() {
+    mkdir -p ~/.bem || exit 1
+    touch ~/.bem/aliaslist.bin || exit 1
+    rm -f ~/.bem/bem_source.bash
+    touch ~/.bem/bem_source.bash || exit 1
+    local script_path
+    script_path=$(realpath "${BASH_SOURCE[0]}")
+    local bem_alias="alias bem='$script_path'"
+    echo "$bem_alias" >> ~/.bem/bem_source.bash
+    sourcedcode=$(cat <<-"EOF"
+    while IFS= read -r line; do
+        _plugin_name="${line:0:35}"
+        _plugin_name="${_plugin_name// /}"
+        _is_plugin_enabled="${line:35:1}"
+        if (( $_is_plugin_enabled == 1 )); then
+            alias $_plugin_name="'${line:37}'"
+        fi
+    done < ~/.bem/aliaslist.bin
+EOF
+)
+    echo "$sourcedcode" >> ~/.bem/bem_source.bash
+    echo "BEM initialized at ~/.bem."
+    local bem_source="source ~/.bem/bem_source.bash"
+    if ! grep -Fxq "$bem_source" ~/.bashrc; then
+        echo "$bem_source" >> ~/.bashrc
+        echo "Linked to ~/.bashrc."
+        echo "Type: 'exec bash' to apply changes."
     else
-        for name in "$@"; do
-            if grep -q "^$name=" "$CONFIG_FILE"; then
-                local plugin_dir="$PLUG_IN_DIR/$name"
-                if [[ -d "$plugin_dir" ]]; then
-                    local doc_file=""
-                    for docs in "$plugin_dir"/{*.txt,*.md,README,README.md}; do
-                        if [[ -f "$docs" ]]; then
-                            doc_file="$docs"
-                            break
-                        fi
-                    done
-                    if [[ -n $doc_file ]]; then
-                        ${PAGER:-less} "$doc_file"
-                    else
-                        echo "No documentation found for '$name'."
-                    fi
-                else
-                    echo "Error: Plugin '$name' not found in $PLUG_IN_DIR."
-                fi
-            else
-                echo "Error: Plugin '$name' not found in $CONFIG_FILE."
-            fi
-        done
+        echo "line 'source ~/.bem/bem_source.bash' already present in ~/.bashrc."
     fi
 }
 
-is_git_repo() {
-    local dir="$1"
-    [[ -d "$dir/.git" ]]
+list() {
+    local name status finalstr
+    while IFS= read -r line; do
+        name="${line:0:35}"
+        name="${name// /}"
+        if (( ${line:35:1} == 1 )); then
+            status="enable"
+        else
+            status="disable"
+        fi
+        if (( ${line:36:1} == 1 )); then
+            finalstr="$name ($status) <git-repo>[${line:37}]"
+        else
+            finalstr="$name ($status) [${line:37}]"
+        fi
+        echo "$finalstr"
+    done < ~/.bem/aliaslist.bin
+}
+
+update() {
+    local name main_dir
+    while IFS= read -r line; do
+        name="${line:0:35}"
+        name="${name// /}"
+        for plugin in "$@"; do
+            if [[ $plugin -eq $name ]]; then
+                if (( ${line:36:1} == 1 )); then
+                    main_dir="${${line:37}%/*}"
+                    pushd "$main_dir" >/dev/null || error_exit "Error: Could not access path for '$main_dir'."
+                    git pull || error_exit "Error: Failed to update '$name'."
+                    popd >/dev/null
+                    echo "Updated '$name'."
+                else
+                    echo "Error: '$main_dir' is not a Git repository." >&2
+                fi
+            fi
+        done;
+    done < ~/.bem/aliaslist.bin
+}
+
+updateall() {
+    local name main_dir
+    while IFS= read -r line; do
+        name="${line:0:35}"
+        name="${name// /}"
+        if (( ${line:36:1} == 1 )); then
+            main_dir="${${line:37}%/*}"
+            pushd "$main_dir" >/dev/null || error_exit "Error: Could not access path for '$main_dir'."
+            git pull || error_exit "Error: Failed to update '$name'."
+            popd >/dev/null
+            echo "Updated '$name'."
+        fi
+    done < ~/.bem/aliaslist.bin
+}
+
+selfupdate() {
+    local bem_path
+    bem_path="${BASH_SOURCE[0]}"
+    bem_dir="${bem_path%/*}"
+    pushd "$bem_dir" >/dev/null || error_exit "Error: Could not access path for '$bem_dir'."
+    git pull || error_exit "Error: Failed to update '$name'."
+    popd >/dev/null
+    echo "Updated 'bem'."
+}
+
+help() {
+    local name
+    while IFS= read -r line; do
+        name="${line:0:35}"
+        name="${name// /}"
+            for plugin in "$@"; do
+                if [[ $plugin -eq $name ]]; then
+                    local plugin_dir="${${line:37}%/*}"
+                    if [[ -d $plugin_dir ]]; then
+                        local doc_file=""
+                        for docs in "$plugin_dir"/{*.txt,*.md,README,README.md}; do
+                            if [[ -f "$docs" ]]; then
+                                doc_file="$docs"
+                                break
+                            fi
+                        done
+                        if [[ -n $doc_file ]]; then
+                            ${PAGER:-less} "$doc_file"
+                        else
+                            echo "No documentation found for '$name'." >&2
+                        fi
+                    else
+                        echo "Error: Plugin '$name' path: '$plugin_dir' is not a valid directory." >&2
+                    fi
+                fi
+            done;
+    done < ~/.bem/aliaslist.bin
+}
+
+enable() {
+    for plugin in "$@"; do
+        if sed -i "/$plugin/ s/./1/35" ~/.bem/aliaslist.bin; then
+            echo "Enabled '$plugin'."
+            echo "Type: 'exec bash' to apply changes."
+        else
+            echo "'$plugin' not found in ~/.bem/aliaslist.bin" >&2
+        fi
+    done
+}
+
+disable() {
+    for plugin in "$@"; do
+        if sed -i "/$plugin/ s/./0/35" ~/.bem/aliaslist.bin; then
+            echo "Enabled '$plugin'."
+            echo "Type: 'exec bash' to apply changes."
+        else
+            echo "'$plugin' not found in ~/.bem/aliaslist.bin" >&2
+        fi
+    done
 }
 
 error_exit() {
@@ -79,172 +200,98 @@ error_exit() {
 }
 
 install() {
-    for path in "$@"; do
-        if [[ -f "$path" ]]; then
-            local name=$(basename "$path" | sed 's/\.[^.]*$//')
-            if grep -q "^$name=" "$CONFIG_FILE"; then
-                echo "Error: Plugin '$name' already exists." >&2
-                continue
-            fi
-
-            mkdir -p "$PLUG_IN_DIR/$name"
-            ln -s "$(realpath "$path")" "$PLUG_IN_DIR/$name/"
-            local is_repo=$(is_git_repo "$(dirname "$path")" && echo "yes" || echo "no")
-            echo "$name=disabled;path=$(realpath "$path");repo=$is_repo" >> "$CONFIG_FILE"
-            echo "Installed '$name'."
-
-        elif [[ -d "$path" ]]; then
-            local name=$(basename "$path")
-            if grep -q "^$name=" "$CONFIG_FILE"; then
-                echo "Error: Plugin '$name' already exists." >&2
-                continue
-            fi
-
-            mkdir -p "$PLUG_IN_DIR/$name"
-            ln -s "$path" "$PLUG_IN_DIR/$name"
-            local is_repo=$(is_git_repo "$path" && echo "yes" || echo "no")
-            echo "$name=disabled;path=$(realpath "$path");repo=$is_repo" >> "$CONFIG_FILE"
-            echo "Installed '$name'."
-
-        else
-            error_exit "Error: '$path' is neither a valid file nor directory."
-        fi
+    local custom_name=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -n)
+                # Se -n è seguito da un argomento, impostiamo il nome personalizzato
+                custom_name="$2"
+                shift 2  # Sposta avanti di due posizioni, saltando l'opzione e il suo argomento
+                ;;
+            *)
+                path=$1
+                if [[ -f "$path" ]]; then
+                    local name="${custom_name:-${path##*/}}"
+                    if grep -q "^$name=" ~/.bem/aliaslist.bin; then
+                        echo "Error: Plugin '$name' already exists." >&2
+                        continue
+                    fi
+                    local is_repo=$([ -d "$(dirname "$path")/.git" ] && echo 1 || echo 0)
+                    name="${name:0:35}"
+                    enable=1
+                    plugin_dir=$(realpath "$path")
+                    printf "%-35s%c%c%s\n" "$name" "$is_repo" "$enable" "$plugin_dir">> ~/.bem/aliaslist.bin
+                    echo "Installed '$name'."
+                    echo "Type: 'exec bash' to apply changes."
+                else
+                    error_exit "Error: '$path' is neither a valid file nor directory."
+                fi
+                shift
+            ;;
+        esac
     done
-}
-
-list() {
-    while IFS= read -r line; do
-        local name status path repo
-        name=$(cut -d';' -f1 <<< "$line" | cut -d'=' -f1)
-        status=$(cut -d';' -f1 <<< "$line" | cut -d'=' -f2)
-        path=$(cut -d';' -f2 <<< "$line" | cut -d'=' -f2)
-        repo=$(cut -d';' -f3 <<< "$line" | cut -d'=' -f2)
-        echo "$name ($status) [path: $path, repo: $repo]"
-    done < "$CONFIG_FILE"
-}
-
-update() {
-    for plugin in "$@"; do
-        if grep -q "^$plugin=" "$CONFIG_FILE"; then
-            local path=$(grep "^$plugin=" "$CONFIG_FILE" | cut -d';' -f2 | cut -d'=' -f2)
-            local repo=$(grep "^$plugin=" "$CONFIG_FILE" | cut -d';' -f3 | cut -d'=' -f2)
-            if [[ "$repo" == "yes" ]]; then
-                pushd "$path" >/dev/null || error_exit "Error: Could not access path for '$plugin'."
-                git pull || error_exit "Error: Failed to update '$plugin'."
-                popd >/dev/null
-                echo "Updated '$plugin'."
-            else
-                echo "Error: '$plugin' is not a Git repository." >&2
-            fi
-        else
-            echo "Error: Plugin '$plugin' not found in configuration." >&2
-        fi
-    done
-}
-
-updateall() {
-    while IFS= read -r line; do
-        local name=$(cut -d';' -f1 <<< "$line" | cut -d'=' -f1)
-        local path=$(cut -d';' -f2 <<< "$line" | cut -d'=' -f2)
-        local repo=$(cut -d';' -f3 <<< "$line" | cut -d'=' -f2)
-        if [[ "$repo" == "yes" ]]; then
-            pushd "$path" >/dev/null || error_exit "Error: Could not access path for '$name'."
-            git pull || error_exit "Error: Failed to update '$name'."
-            popd >/dev/null
-            echo "Updated '$name'."
-        fi
-    done < "$CONFIG_FILE"
 }
 
 remove() {
+    force_removal=false
+    remove_files=false
+    while getopts ":Af" opt; do
+        case $opt in
+            f)
+                force_removal=true
+                ;;
+            *)
+                echo "Usage: remove [-f] <plugin_name1 plugin_name2 ...>"
+                return 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
     for plugin in "$@"; do
-        if grep -q "^$plugin=" "$CONFIG_FILE"; then
-            sed -i "/^$plugin=/d" "$CONFIG_FILE"
-            rm -rf "$PLUG_IN_DIR/$plugin"
+        if [[ "$force_removal" = false ]]; then
+            read -p "Do you want to permanently remove '$plugin'? (y/n): " confirmation
+            if [[ ! "$confirmation" =~ ^[Yy]$ ]]; then
+                continue
+            fi
+        fi
+        if sed -i "/^$plugin /d" ~/.bem/aliaslist.bin; then
             echo "Removed '$plugin'."
         else
-            echo "Error: Plugin '$plugin' not found in configuration." >&2
+            echo "Error: Plugin '$plugin' not found." >&2
         fi
     done
+    echo "Type: 'exec bash' to apply changes."
 }
 
-enable() {
-    for plugin in "$@"; do
-        if grep -q "^$plugin=" "$CONFIG_FILE"; then
-            sed -i "s/^$plugin=disabled/$plugin=enabled/" "$CONFIG_FILE"
-            source "$PLUG_IN_DIR/$plugin"/*.sh 2>/dev/null || {
-                echo "Error: Failed to source '$plugin'." >&2
-                continue
-            }
-            echo "Enabled '$plugin'."
-            echo "Type: 'exec bash' to apply changes."
-        else
-            echo "Error: Plugin '$plugin' not found in configuration." >&2
-        fi
-    done
-}
 
-disable() {
-    for plugin in "$@"; do
-        if grep -q "^$plugin=" "$CONFIG_FILE"; then
-            sed -i "s/^$plugin=enabled/$plugin=disabled/" "$CONFIG_FILE"
-            echo "Disabled '$plugin'."
-            echo "Type: 'exec bash' to apply changes."
-        else
-            echo "Error: Plugin '$plugin' not found in configuration." >&2
-        fi
-    done
-}
-
-source_bem() {
-    while IFS=';' read -r line; do
-        local plugin=$(cut -d'=' -f1 <<< "$line")
-        local status=$(cut -d';' -f1 <<< "$line" | cut -d'=' -f2)
-        if [[ $status == "enabled" ]]; then
-            for file in "$PLUG_IN_DIR/$plugin"/*.sh; do
-                if [[ -f $file ]]; then
-                    source "$file"
-                fi
-            done
-        fi
-    done < "$CONFIG_FILE"
-}
-
-if (return 2>/dev/null); then
-    source_bem
+if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
 else
     command="$1"
     shift
+
     case "$command" in
-        install)
-            install "$@"
+        install) install "$@" ;;
+        enable) enable "$@" ;;
+        disable) disable "$@" ;;
+        list) list ;;
+        remove) remove "$@" ;;
+        update) update "$@" ;;
+        update-all) updateall ;;
+        self-update) selfupdate ;;
+        init) init ;;
+        help) 
+            if [ "$#" -gt 0 ]; then
+                help "$@"
+            else
+                usage
+            fi
             ;;
-        enable)
-            enable "$@"
-            ;;
-        disable)
-            disable "$@"
-            ;;
-        list|ls)
-            list
-            ;;
-        remove|rm)
-            remove "$@"
-            ;;
-        update)
-            update "$@"
-            ;;
-        updateall)
-            updateall
-            ;;
-        init)
-            init
-            ;;
-        help|-h|h)
-            help "$@"
-            ;;
-        *)
-            usage >&2
+        *) 
+            echo "Unknown command: $command"
+            usage
+            exit 1
             ;;
     esac
 fi
