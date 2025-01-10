@@ -103,9 +103,10 @@ update() {
         name="${line:0:35}"
         name="${name// /}"
         for plugin in "$@"; do
-            if [[ $plugin -eq $name ]]; then
+            if [[ $plugin == $name ]]; then
                 if (( ${line:36:1} == 1 )); then
-                    main_dir="${${line:37}%/*}"
+                    pgpath="${line:37}"
+                    main_dir="${pgpath%/*}"
                     pushd "$main_dir" >/dev/null || error_exit "Error: Could not access path for '$main_dir'."
                     git pull || error_exit "Error: Failed to update '$name'."
                     popd >/dev/null
@@ -124,7 +125,8 @@ updateall() {
         name="${line:0:35}"
         name="${name// /}"
         if (( ${line:36:1} == 1 )); then
-            main_dir="${${line:37}%/*}"
+            pgpath="${line:37}"
+            main_dir="${pgpath%/*}"
             pushd "$main_dir" >/dev/null || error_exit "Error: Could not access path for '$main_dir'."
             git pull || error_exit "Error: Failed to update '$name'."
             popd >/dev/null
@@ -149,8 +151,9 @@ help() {
         name="${line:0:35}"
         name="${name// /}"
             for plugin in "$@"; do
-                if [[ $plugin -eq $name ]]; then
-                    local plugin_dir="${${line:37}%/*}"
+                if [[ "$plugin" == "$name" ]]; then
+                    local pgpath="${line:37}"
+                    local plugin_dir="${pgpath%/*}"
                     if [[ -d $plugin_dir ]]; then
                         local doc_file=""
                         for docs in "$plugin_dir"/{*.txt,*.md,README,README.md}; do
@@ -174,7 +177,7 @@ help() {
 
 enable() {
     for plugin in "$@"; do
-        if sed -i "/$plugin/ s/./1/35" ~/.bem/aliaslist.bin; then
+        if sed -i "/$plugin/ s/./1/36" ~/.bem/aliaslist.bin; then
             echo "Enabled '$plugin'."
             echo "Type: 'exec bash' to apply changes."
         else
@@ -185,8 +188,8 @@ enable() {
 
 disable() {
     for plugin in "$@"; do
-        if sed -i "/$plugin/ s/./0/35" ~/.bem/aliaslist.bin; then
-            echo "Enabled '$plugin'."
+        if sed -i "/$plugin/ s/./0/36" ~/.bem/aliaslist.bin; then
+            echo "Disabled '$plugin'."
             echo "Type: 'exec bash' to apply changes."
         else
             echo "'$plugin' not found in ~/.bem/aliaslist.bin" >&2
