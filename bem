@@ -56,8 +56,7 @@ init() {
     touch ~/.bem/bem_source.bash || exit 1
     local script_path
     script_path=$(realpath "${BASH_SOURCE[0]}")
-    local bem_alias="alias bem='$script_path'"
-    echo "$bem_alias" >> ~/.bem/bem_source.bash
+    echo "alias bem='$script_path'" >> ~/.bem/bem_source.bash
     sourcedcode=$(cat <<-"EOF"
     _bem_autocomplete(){
         local cur prev opts
