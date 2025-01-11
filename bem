@@ -1,36 +1,35 @@
 #!/usr/bin/env bash
 
 usage() {
-    local green=$(tput setaf 40 2>/dev/null)
+    local green=$(tput setaf 10 2>/dev/null)
     local resetc=$(tput sgr0 2>/dev/null)
-    local sky=$(tput setaf 38 2>/dev/null)
-    local yellow=$(tput setaf 227 2>/dev/null)
+    local sky=$(tput setaf 12 2>/dev/null)
     cat <<EOF
 Usage: ${green}bem${sky} <command>${resetc}
 
 Available commands:
-  ${sky}install${yellow} [-option arg] <file> [-option arg] <file> ...${resetc}
+  ${sky}install${resetc} [-option arg] <file> [-option arg] <file> ...
       Install new plugins.
       Options:
         -n <name>   Specify a custom name for the file alias in the shell
                     (defaults to the filename).
 
-  ${sky}enable${yellow} <plugin_name1 plugin_name2 ...>${resetc}             
+  ${sky}enable${resetc} <plugin_name1 plugin_name2 ...>
       Enable specified plugins.
 
-  ${sky}disable${yellow} <plugin_name1 plugin_name2 ...>${resetc}            
+  ${sky}disable${resetc} <plugin_name1 plugin_name2 ...>
       Disable specified plugins.
 
   ${sky}list${resetc}                                       
       List all plugins and their current status.
 
-  ${sky}remove${yellow} [-option arg] <plugin_name1 plugin_name2 ...>${resetc}
+  ${sky}remove${resetc} [-option arg] <plugin_name1 plugin_name2 ...>
       Remove specified plugins.
       Options:
         -A           Remove also the original file of the plugin.
         -f           Force removal without any prompts.
 
-  ${sky}update${yellow} <plugin_name1 plugin_name2 ...>${resetc}          
+  ${sky}update${resetc} <plugin_name1 plugin_name2 ...>
       Update specific plugins.
 
   ${sky}update-all${resetc}                                  
@@ -42,7 +41,7 @@ Available commands:
   ${sky}init${resetc}                                      
       Initialize the `bem` environment.
 
-  ${sky}help${yellow} <plugin_name1 plugin_name2 ...>${resetc}            
+  ${sky}help${resetc} <plugin_name1 plugin_name2 ...>            
       Show documentation or additional information for specific plugins.
 
   ${sky}help${resetc}                                      
