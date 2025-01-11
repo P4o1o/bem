@@ -5,7 +5,12 @@ usage() {
     local resetc=$(tput sgr0 2>/dev/null)
     local sky=$(tput setaf 12 2>/dev/null)
     cat <<EOF
-Usage: ${green}bem${sky} <command>${resetc}
+ ,,,,,...,,,,,.,.....,
+ ######..#####.##---##
+ #-##-#..#.....#-#-#-#
+ #+++++#.####..#--#--À    Usage: ${green}bem${sky} <command>${resetc}
+ #-##-§..#.....#-----#
+ #####...*#### #-----#
 
 Available commands:
   ${sky}install${resetc} [-option arg] <file> [-option arg] <file> ...
@@ -13,6 +18,9 @@ Available commands:
       Options:
         -n <name>   Specify a custom name for the file alias in the shell
                     (defaults to the filename).
+
+  ${sky}status${resetc} <plugin_name1 plugin_name2 ...>
+      Show the status of specified plugins.
 
   ${sky}enable${resetc} <plugin_name1 plugin_name2 ...>
       Enable specified plugins.
@@ -116,6 +124,29 @@ list() {
             finalstr="$name ($status) [${line:37}]"
         fi
         echo "$finalstr"
+    done < ~/.bem/aliaslist.bin
+}
+
+status() {
+    local name status finalstr
+    while IFS= read -r line; do
+        name="${line:0:35}"
+        name="${name// /}"
+        for plugin in "$@"; do
+            if [[ $plugin == $name ]]; then
+                if (( ${line:35:1} == 1 )); then
+                    status="enable"
+                else
+                    status="disable"
+                fi
+                if (( ${line:36:1} == 1 )); then
+                    finalstr="$name ($status) <git-repo>[${line:37}]"
+                else
+                    finalstr="$name ($status) [${line:37}]"
+                fi
+                echo "$finalstr"
+            fi
+        done
     done < ~/.bem/aliaslist.bin
 }
 
@@ -296,6 +327,7 @@ else
 
     case "$command" in
         install) install "$@" ;;
+        status) status "$@" ;;
         enable) enable "$@" ;;
         disable) disable "$@" ;;
         list) list ;;
