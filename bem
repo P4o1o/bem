@@ -70,14 +70,14 @@ init() {
         local cur prev opts
         cur="${COMP_WORDS[COMP_CWORD]}"
         prev="${COMP_WORDS[COMP_CWORD-1]}"
-        opts="install enable disable list remove update update-all self-update init help"
+        opts="install status enable disable list remove update update-all self-update init help"
 
         case "$prev" in
             install)
                 COMPREPLY=( $(compgen -W "$(printf "%s\n" ./*)" -- "$cur") )
                 return 0
                 ;;
-            enable|disable|remove|help|update)
+            enable|disable|remove|help|update|status)
                 COMPREPLY=( $(compgen -W "$(cut -c1-35 ~/.bem/aliaslist.bin | sed 's/ *$//')" -- "$cur") )
                 return 0
                 ;;
