@@ -60,7 +60,7 @@ EOF
 init() {
     mkdir -p ~/.bem || exit 1
     touch ~/.bem/aliaslist.bin || exit 1
-    rm -f ~/.bem/bem_source.bash
+    rm -f ~/.bem/bem_source.bash || exit 1
     touch ~/.bem/bem_source.bash || exit 1
     local script_path
     script_path=$(realpath "${BASH_SOURCE[0]}")
@@ -99,6 +99,7 @@ init() {
 EOF
 )
     echo "$sourcedcode" >> ~/.bem/bem_source.bash
+    chmod 555 ~/.bem/bem_source.bash || exit 1
     echo "$(tput setaf 40 2>/dev/null)BEM$(tput sgr0 2>/dev/null) initialized at ~/.bem."
     local bem_source="source ~/.bem/bem_source.bash"
     if ! grep -Fxq "$bem_source" ~/.bashrc; then
