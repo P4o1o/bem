@@ -60,6 +60,7 @@ EOF
 init() {
     mkdir -p ~/.bem || exit 1
     touch ~/.bem/aliaslist.bin || exit 1
+    chmod 644 ~/.bem/aliaslist.bin || exit 1
     rm -f ~/.bem/bem_source.bash || exit 1
     touch ~/.bem/bem_source.bash || exit 1
     local script_path
