@@ -75,7 +75,7 @@ init() {
 
         case "$prev" in
             install)
-                COMPREPLY=( $(compgen -W "$(printf "%s\n" ./*)" -- "$cur") )
+                COMPREPLY=( $(compgen -W "$(printf "%s\n" *)" -- "$cur") )
                 return 0
                 ;;
             enable|disable|remove|help|update|status)
@@ -332,8 +332,8 @@ else
         status) status "$@" ;;
         enable) enable "$@" ;;
         disable) disable "$@" ;;
-        list) list ;;
-        remove) remove "$@" ;;
+        list|ls) list ;;
+        remove|rm) remove "$@" ;;
         update) update "$@" ;;
         update-all) updateall ;;
         self-update) selfupdate ;;
