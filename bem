@@ -75,10 +75,10 @@ init() {
 
         case "$prev" in
             install)
-                COMPREPLY=( $(compgen -W "$(printf "%s\n" *)" -- "$cur") )
+                COMPREPLY=( $(compgen -f -X '*/' -- "$cur") )
                 return 0
                 ;;
-            enable|disable|remove|help|update|status)
+            enable|disable|remove|rm|help|update|status)
                 COMPREPLY=( $(compgen -W "$(cut -c1-35 ~/.bem/aliaslist.bin | sed 's/ *$//')" -- "$cur") )
                 return 0
                 ;;
@@ -273,11 +273,16 @@ install() {
                         echo "Error: Plugin '$name' already exists." >&2
                         continue
                     fi
-                    local is_repo=$([ -d "$(dirname "$path")/.git" ] && echo 1 || echo 0)
+                    local is_repo
+                    if [[ -d "$(dirname "$path")/.git" ]]; then
+                        is_repo=1
+                    else
+                        is_repo=0
+                    fi
                     name="${name:0:35}"
                     enable=1
                     plugin_dir=$(realpath "$path")
-                    printf "%-35s%c%c%s\n" "$name" "$is_repo" "$enable" "$plugin_dir">> ~/.bem/aliaslist.bin
+                    printf "%-35s%c%c%s\n" "$name" "$enable" "$is_repo" "$plugin_dir">> ~/.bem/aliaslist.bin
                     echo "Installed '$name'."
                     echo "Type: 'exec bash' to apply changes."
                 else
@@ -306,7 +311,7 @@ remove() {
     shift $((OPTIND - 1))
     for plugin in "$@"; do
         if [[ "$force_removal" = false ]]; then
-            read -p "Do you want to permanently remove '$plugin'? (y/n): " confirmation
+            read -p "Do you want to remove '$plugin'? (y/n): " confirmation
             if [[ ! "$confirmation" =~ ^[Yy]$ ]]; then
                 continue
             fi
