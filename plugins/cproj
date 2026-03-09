@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: cproj name"
+    exit 1
+else
+	name=$1
+	mkdir {src,asm,include}
+	cat <<-EOF > .gitignore
+	bin
+	$name
+	asm
+	EOF
+	cat << EOF > Makefile
+CC = gcc
+CFLAGS = -O3 -Wall -pedantic -std=c18 -Iinclude -march=native
+DFLAGS = -ggdb3
+LIBFLAGS = -lm -Iinclude
+SRCDIR = src
+BINDIR = bin
+ASMDIR = asm
+SRCFILES = \$(wildcard \$(SRCDIR)/*.c)
+OBJFILES = \$(patsubst \$(SRCDIR)/%.c,\$(BINDIR)/%.o,\$(SRCFILES))
+ASMFILES = \$(patsubst \$(SRCDIR)/%.c,\$(ASMDIR)/%.s,\$(SRCFILES))
+
+all: $name
+
+asm: \$(ASMFILES)
+
+$name : \$(OBJFILES)
+	\$(CC) \$(CFLAGS) \$(DFLAGS) -o $name \$(OBJFILES) \$(LIBFLAGS)
+
+\$(BINDIR)/%.o: \$(SRCDIR)/%.c | \$(BINDIR)
+	\$(CC) \$(CFLAGS) \$(DFLAGS) -c \$< -o \$@ \$(LIBFLAGS)
+
+\$(ASMDIR)/%.s: \$(SRCDIR)/%.c | \$(ASMDIR)
+	\$(CC) \$(CFLAGS) -S -masm=intel \$< -o \$@ \$(LIBFLAGS)
+
+\$(BINDIR) \$(ASMDIR):
+	mkdir -p \$@
+
+.PHONY: clean
+clean:
+	rm -rf \$(BINDIR)/*.o \$(ASMDIR)/*.s $name
+EOF
+	
+	cat << "EOF" > src/main.c
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, char *argv[]){
+	return 0;
+}
+
+EOF
+fi

@@ -360,7 +360,7 @@ cmd_list() {
         fi
 
         printf '  %-30s [%b]%b  %s\n' "$name" "$status" "$repo_tag" "$target"
-        (( count++ ))
+        count=$((count+1))
     done
 
     if (( count == 0 )); then
