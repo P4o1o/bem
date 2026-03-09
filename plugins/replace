@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+#
+# replace — Safe recursive find-and-replace (literal strings, no regex).
+#
+# Uses perl for replacements to avoid all sed metacharacter issues.
+# Both SEARCH and REPLACE are treated as literal strings, never as patterns.
+#
+
+set -euo pipefail
+
+readonly PROGNAME=$(basename "$0")
+
+usage() {
+    cat <<EOF
+Usage: ${PROGNAME} [options] <search> <replace> <directory>
+
+Replaces all occurrences of <search> with <replace> in files under <directory>.
+Both search and replace are treated as LITERAL strings (no regex).
+
+Options:
+  -i            Case-insensitive matching.
+  -n            Dry run: show files that would change.
+  -N            Dry run: show files AND matching lines.
+  -j N          Parallel jobs (default: number of CPUs).
+  -e EXT        Only process files with this extension (e.g. -e py).
+  --color       Colored output (dry-run modes only).
+  -h            Show this help.
+
+Examples:
+  ${PROGNAME} foo bar ./src
+  ${PROGNAME} -i 'hello world' 'goodbye world' ./project
+  ${PROGNAME} -N --color 'std::cout' 'fmt::print' ./code
+  ${PROGNAME} -e js 'var ' 'const ' ./src
+EOF
+}
+
+# ── Defaults ─────────────────────────────────────────────────────────────────
+
+IGNORE_CASE=0
+DRY_RUN=0
+SHOW_LINES=0
+COLOR=0
+JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+EXT=""
+
+# ── Parse options ────────────────────────────────────────────────────────────
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -i) IGNORE_CASE=1 ;;
+        -n) DRY_RUN=1 ;;
+        -N) DRY_RUN=1; SHOW_LINES=1 ;;
+        -j)
+            [[ $# -lt 2 ]] && { echo "Error: -j requires an argument." >&2; exit 1; }
+            JOBS="$2"
+            [[ "$JOBS" =~ ^[0-9]+$ ]] || { echo "Error: -j requires a number." >&2; exit 1; }
+            shift
+            ;;
+        -e)
+            [[ $# -lt 2 ]] && { echo "Error: -e requires an argument." >&2; exit 1; }
+            EXT="$2"
+            shift
+            ;;
+        --color) COLOR=1 ;;
+        -h) usage; exit 0 ;;
+        --) shift; break ;;
+        -*) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+        *)  break ;;
+    esac
+    shift
+done
+
+SEARCH="${1:-}"
+REPLACE="${2:-}"
+DIR="${3:-}"
+
+if [[ -z "$SEARCH" || -z "$DIR" ]]; then
+    usage
+    exit 1
+fi
+
+if [[ ! -d "$DIR" ]]; then
+    echo "Error: '${DIR}' is not a directory." >&2
+    exit 1
+fi
+
+# ── Build the find command ───────────────────────────────────────────────────
+
+FIND_ARGS=(find "$DIR"
+    '(' -name '.git' -o -name 'node_modules' -o -name '__pycache__'
+        -o -name '.svn' -o -name 'build' -o -name 'dist' ')'
+    -prune -o -type f
+)
+
+if [[ -n "$EXT" ]]; then
+    FIND_ARGS+=(-name "*.${EXT}")
+fi
+
+FIND_ARGS+=(-print0)
+
+# ── Build grep options for dry-run matching ──────────────────────────────────
+
+GREP_OPTS=(-F)  # -F = fixed strings, no regex interpretation
+if [[ $IGNORE_CASE -eq 1 ]]; then
+    GREP_OPTS+=(-i)
+fi
+
+# ── Process ──────────────────────────────────────────────────────────────────
+
+# Export what the worker needs.
+export SEARCH REPLACE IGNORE_CASE DRY_RUN SHOW_LINES COLOR
+
+process_file() {
+    local f="$1"
+
+    # Skip binary files
+    if file --brief --mime-encoding -- "$f" 2>/dev/null | grep -q 'binary'; then
+        return 0
+    fi
+
+    local grep_flags=(-F -q)
+    if [[ $IGNORE_CASE -eq 1 ]]; then
+        grep_flags+=(-i)
+    fi
+
+    # Check if file contains the search string at all (fast bailout)
+    if ! grep "${grep_flags[@]}" -- "$SEARCH" "$f"; then
+        return 0
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        if [[ $SHOW_LINES -eq 1 ]]; then
+            local line_flags=(-Fn -H)
+            [[ $IGNORE_CASE -eq 1 ]] && line_flags+=(-i)
+            [[ $COLOR -eq 1 ]] && line_flags+=(--color=always)
+            grep "${line_flags[@]}" -- "$SEARCH" "$f"
+        else
+            if [[ $COLOR -eq 1 ]]; then
+                printf '\033[34m%s\033[0m\n' "$f"
+            else
+                printf '%s\n' "$f"
+            fi
+        fi
+    else
+        # Use perl for the actual replacement — treats search and replace
+        # as literal strings, completely avoiding delimiter/metachar issues.
+        local perl_search="$SEARCH"
+        local perl_replace="$REPLACE"
+        local perl_flags="g"
+        if [[ $IGNORE_CASE -eq 1 ]]; then
+            perl_flags="gi"
+        fi
+
+        perl -pi -e '
+            BEGIN {
+                $s = $ENV{SEARCH};
+                $r = $ENV{REPLACE};
+            }
+            s/\Q$s/$r/'"${perl_flags}"'
+        ' -- "$f"
+    fi
+}
+export -f process_file
+
+"${FIND_ARGS[@]}" | xargs -0 -n1 -P "$JOBS" bash -c 'process_file "$@"' _

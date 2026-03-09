@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+#
+# search — Fast file/content search with directory exclusions.
+#
+# Searches by filename or file content. All queries are literal (no regex).
+#
+
+set -euo pipefail
+
+readonly PROGNAME=$(basename "$0")
+
+usage() {
+    cat <<EOF
+Usage: ${PROGNAME} [options] <query>
+
+Search for files by name or content under a directory.
+
+Options:
+  -c            Search file contents instead of filenames.
+  -d DIR        Directory to search in (default: .).
+  -e EXT        Filter by file extension (e.g. -e py).
+  -i            Case-insensitive search.
+  --color       Colored output.
+  -o            Open the first matching file in \$EDITOR (or vim).
+  -h            Show this help.
+
+Examples:
+  ${PROGNAME} main                    # Find files with "main" in name
+  ${PROGNAME} -c 'TODO' -e py         # Search for TODO in .py files
+  ${PROGNAME} -c -i --color error      # Case-insensitive content search
+  ${PROGNAME} -d ./src -e rs config    # Find "config" files in ./src
+EOF
+}
+
+# ── Defaults ─────────────────────────────────────────────────────────────────
+
+DIR="."
+MODE="name"
+EXT=""
+COLOR=0
+QUERY=""
+OPEN=0
+IGNORE_CASE=0
+
+# ── Parse options ────────────────────────────────────────────────────────────
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -d)
+            [[ $# -lt 2 ]] && { echo "Error: -d requires an argument." >&2; exit 1; }
+            DIR="$2"
+            shift 2
+            ;;
+        -c)  MODE="content"; shift ;;
+        -e)
+            [[ $# -lt 2 ]] && { echo "Error: -e requires an argument." >&2; exit 1; }
+            EXT="$2"
+            shift 2
+            ;;
+        -i)  IGNORE_CASE=1; shift ;;
+        --color) COLOR=1; shift ;;
+        -o)  OPEN=1; shift ;;
+        -h)  usage; exit 0 ;;
+        --)  shift; break ;;
+        -*)  echo "Unknown option: $1" >&2; usage; exit 1 ;;
+        *)
+            if [[ -z "$QUERY" ]]; then
+                QUERY="$1"
+            else
+                echo "Error: unexpected argument '$1'." >&2
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$QUERY" ]]; then
+    echo "Error: no query specified." >&2
+    usage
+    exit 1
+fi
+
+if [[ ! -d "$DIR" ]]; then
+    echo "Error: '${DIR}' is not a directory." >&2
+    exit 1
+fi
+
+# ── Directories to ignore ───────────────────────────────────────────────────
+
+IGNORE_DIRS=(.git node_modules build dist __pycache__ .svn .hg .tox .mypy_cache)
+
+# ── Build find command ───────────────────────────────────────────────────────
+#
+# The correct find pruning syntax requires grouping with parentheses:
+#   find DIR ( -name X -o -name Y ) -prune -o -type f ... -print
+#
+# The original script appended -prune -o per directory, which doesn't work.
+
+build_find_cmd() {
+    local -a cmd=(find "$DIR" '(')
+
+    local first=1
+    for d in "${IGNORE_DIRS[@]}"; do
+        if [[ $first -eq 1 ]]; then
+            first=0
+        else
+            cmd+=(-o)
+        fi
+        cmd+=(-name "$d")
+    done
+
+    cmd+=(')' -prune -o -type f)
+
+    if [[ -n "$EXT" ]]; then
+        cmd+=(-name "*.${EXT}")
+    fi
+
+    printf '%s\0' "${cmd[@]}"
+}
+
+# Read the find command into an array safely
+FIND_CMD=()
+while IFS= read -r -d '' arg; do
+    FIND_CMD+=("$arg")
+done < <(build_find_cmd)
+
+# ── Grep options ─────────────────────────────────────────────────────────────
+
+GREP_OPTS=(-F)  # Fixed string, no regex
+if [[ $IGNORE_CASE -eq 1 ]]; then
+    GREP_OPTS+=(-i)
+fi
+
+# ── Name search ──────────────────────────────────────────────────────────────
+
+search_by_name() {
+    local first_match=""
+
+    # Use grep -F on the filename to do literal matching (not glob).
+    # This avoids issues with special characters in QUERY.
+    "${FIND_CMD[@]}" -print 2>/dev/null | while IFS= read -r filepath; do
+        local basename="${filepath##*/}"
+
+        local grep_flags=(-F -q)
+        [[ $IGNORE_CASE -eq 1 ]] && grep_flags+=(-i)
+
+        if printf '%s' "$basename" | grep "${grep_flags[@]}" -- "$QUERY"; then
+            if [[ $COLOR -eq 1 ]]; then
+                local color_flags=(-F --color=always)
+                [[ $IGNORE_CASE -eq 1 ]] && color_flags+=(-i)
+                # Highlight the query in the full path
+                printf '%s\n' "$filepath" | grep "${color_flags[@]}" -- "$QUERY" || printf '%s\n' "$filepath"
+            else
+                printf '%s\n' "$filepath"
+            fi
+        fi
+    done
+}
+
+# ── Content search ───────────────────────────────────────────────────────────
+
+search_by_content() {
+    local grep_flags=(-F -n -H --binary-files=without-match)
+    [[ $IGNORE_CASE -eq 1 ]] && grep_flags+=(-i)
+
+    if [[ $COLOR -eq 1 ]]; then
+        grep_flags+=(--color=always)
+    fi
+
+    # Collect files first, then grep. This is more reliable than -exec
+    # because it handles filenames with special characters correctly.
+    "${FIND_CMD[@]}" -print0 2>/dev/null | xargs -0 grep "${grep_flags[@]}" -- "$QUERY" || true
+}
+
+# ── Run ──────────────────────────────────────────────────────────────────────
+
+if [[ "$MODE" == "name" ]]; then
+    search_by_name
+else
+    search_by_content
+fi
+
+# ── Open first match ────────────────────────────────────────────────────────
+
+if [[ $OPEN -eq 1 ]]; then
+    first_file=""
+
+    if [[ "$MODE" == "name" ]]; then
+        first_file=$("${FIND_CMD[@]}" -print 2>/dev/null | while IFS= read -r filepath; do
+            local basename="${filepath##*/}"
+            local grep_flags=(-F -q)
+            [[ $IGNORE_CASE -eq 1 ]] && grep_flags+=(-i)
+            if printf '%s' "$basename" | grep "${grep_flags[@]}" -- "$QUERY"; then
+                printf '%s' "$filepath"
+                break
+            fi
+        done)
+    else
+        first_file=$("${FIND_CMD[@]}" -print0 2>/dev/null \
+            | xargs -0 grep -lF ${IGNORE_CASE:+-i} -- "$QUERY" 2>/dev/null \
+            | head -n1)
+    fi
+
+    if [[ -n "$first_file" ]]; then
+        exec "${EDITOR:-vim}" -- "$first_file"
+    else
+        echo "No matches to open." >&2
+    fi
+fi
