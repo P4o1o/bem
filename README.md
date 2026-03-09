@@ -120,7 +120,6 @@ search -c -i --color error         # case-insensitive content search
 search -d ./src -e rs config       # search in a specific directory
 search -o main                     # open first match in $EDITOR
 ```
-
 **Options:** `-c` content mode, `-d` directory, `-e` extension filter, `-i` case-insensitive, `--color` colored output, `-o` open first match.
 
 ### replace
@@ -135,6 +134,10 @@ replace -e js 'var ' 'const ' ./src            # only in .js files
 ```
 
 **Options:** `-i` case-insensitive, `-n` dry run (files only), `-N` dry run (files + lines), `-j N` parallel jobs, `-e` extension filter, `--color` colored output.
+
+### ansicolor
+
+Print the ansi color table and other utils [Github repo](https://github.com/P4o1o/ansicolor)
 
 ## Using External Plugins
 
