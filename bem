@@ -107,7 +107,7 @@ validate_file_path() {
     [[ -r "$raw_path" ]] || die "File '${raw_path}' is not readable."
 
     local resolved
-    resolved=$(realpath -- "$raw_path")
+    resolved=$(realpath  "$raw_path")
 
     local perms
     perms=$(stat -c '%a' "$resolved" 2>/dev/null) || true
@@ -137,14 +137,14 @@ _create_link() {
         msg_err "'${link}' exists and is not a symlink. Refusing to overwrite."
         return 1
     fi
-    rm -f -- "$link"
-    ln -s -- "$target" "$link" || die "Could not create symlink '${link}'."
+    rm -f  "$link"
+    ln -s  "$target" "$link" || die "Could not create symlink '${link}'."
 }
 
 _remove_link() {
     local link="${BIN_DIR}/$1"
     if [[ -L "$link" ]]; then
-        rm -f -- "$link"
+        rm -f  "$link"
     elif [[ -e "$link" ]]; then
         msg_warn "'${link}' is not a symlink managed by bem. Leaving it alone."
     fi
@@ -175,7 +175,7 @@ _sync_links() {
         [[ -e "$link" ]] && continue
         link_name="${link##*/}"
         if plugin_exists "$link_name"; then
-            rm -f -- "$link"
+            rm -f  "$link"
         fi
     done
 }
@@ -197,10 +197,10 @@ _bem_autocomplete() {
 
     case "$prev" in
         bem)
-            COMPREPLY=( $(compgen -W "install remove purge uninstall enable disable list status update update-all upgradeable self-update init help version" -- "$cur") )
+            COMPREPLY=( $(compgen -W "install remove purge uninstall enable disable list status update update-all upgradeable self-update init help version"  "$cur") )
             ;;
         install)
-            COMPREPLY=( $(compgen -f -- "$cur") )
+            COMPREPLY=( $(compgen -f  "$cur") )
             ;;
         enable)
             local p="" d n
@@ -209,7 +209,7 @@ _bem_autocomplete() {
                 n="${d%/}"; n="${n##*/}"
                 [ ! -f "${d}enabled" ] && p+="$n "
             done
-            COMPREPLY=( $(compgen -W "$p" -- "$cur") )
+            COMPREPLY=( $(compgen -W "$p"  "$cur") )
             ;;
         disable)
             local p="" d n
@@ -218,7 +218,7 @@ _bem_autocomplete() {
                 n="${d%/}"; n="${n##*/}"
                 [ -f "${d}enabled" ] && p+="$n "
             done
-            COMPREPLY=( $(compgen -W "$p" -- "$cur") )
+            COMPREPLY=( $(compgen -W "$p"  "$cur") )
             ;;
         update|upgradeable)
             local p="" d n
@@ -227,7 +227,7 @@ _bem_autocomplete() {
                 n="${d%/}"; n="${n##*/}"
                 [ -f "${d}repo" ] && p+="$n "
             done
-            COMPREPLY=( $(compgen -W "$p" -- "$cur") )
+            COMPREPLY=( $(compgen -W "$p"  "$cur") )
             ;;
         remove|rm|purge|help|status)
             local p="" d n
@@ -236,7 +236,7 @@ _bem_autocomplete() {
                 n="${d%/}"; n="${n##*/}"
                 p+="$n "
             done
-            COMPREPLY=( $(compgen -W "$p" -- "$cur") )
+            COMPREPLY=( $(compgen -W "$p"  "$cur") )
             ;;
     esac
 }
@@ -244,7 +244,7 @@ complete -F _bem_autocomplete bem
 AUTOCOMPLETE
 
     chmod 444 "$tmpfile"
-    mv -f -- "$tmpfile" "${SOURCE_FILE}" || die "Could not update ${SOURCE_FILE}"
+    mv -f  "$tmpfile" "${SOURCE_FILE}" || die "Could not update ${SOURCE_FILE}"
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -255,7 +255,7 @@ cmd_init() {
     chmod 700 "${BEM_DIR}"
 
     local bem_path
-    bem_path=$(realpath -- "${BASH_SOURCE[0]}")
+    bem_path=$(realpath  "${BASH_SOURCE[0]}")
     _create_link "bem" "$bem_path"
 
     _regenerate_source
@@ -371,7 +371,7 @@ cmd_remove() {
         fi
 
         _remove_link "$plugin"
-        rm -rf -- "${PLUGINS_DIR:?}/${plugin}"
+        rm -rf  "${PLUGINS_DIR:?}/${plugin}"
         msg_ok "Removed '${plugin}'. Original file preserved at: ${target}"
     done
 
@@ -401,14 +401,14 @@ cmd_purge() {
         _remove_link "$plugin"
 
         if [[ -f "$target" ]]; then
-            rm -f -- "$target" && msg "Deleted '${target}'."
+            rm -f  "$target" && msg "Deleted '${target}'."
         elif [[ -e "$target" ]]; then
             msg_warn "'${target}' is not a regular file. Not deleting."
         else
             msg_warn "'${target}' already does not exist."
         fi
 
-        rm -rf -- "${PLUGINS_DIR:?}/${plugin}"
+        rm -rf  "${PLUGINS_DIR:?}/${plugin}"
         msg_ok "Purged '${plugin}'."
     done
 
@@ -459,11 +459,11 @@ cmd_uninstall() {
             END { if (inizio) printf "%s", blocco }
             ' ~/.bashrc > "$tmprc" || die "Could not process ~/.bashrc"
 
-        mv -f -- "$tmprc" ~/.bashrc
+        mv -f  "$tmprc" ~/.bashrc
     fi
 
     # Remove bem data directory
-    rm -rf -- "${BEM_DIR}"
+    rm -rf  "${BEM_DIR}"
 
     msg_ok "bem has been uninstalled."
     msg "Run 'exec bash' to apply changes."
@@ -683,7 +683,7 @@ cmd_upgradeable() {
 
 cmd_self_update() {
     local bem_path bem_dir
-    bem_path=$(realpath -- "${BASH_SOURCE[0]}")
+    bem_path=$(realpath  "${BASH_SOURCE[0]}")
     bem_dir=$(dirname "$bem_path")
 
     git -C "$bem_dir" rev-parse --is-inside-work-tree &>/dev/null \
@@ -722,7 +722,7 @@ cmd_help() {
 
         if [[ -n "$doc_file" ]]; then
             msg "── ${plugin} ──"
-            ${PAGER:-less} -- "$doc_file"
+            ${PAGER:-less}  "$doc_file"
         else
             msg_warn "No documentation found for '${plugin}'."
         fi
