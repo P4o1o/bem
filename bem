@@ -447,11 +447,18 @@ cmd_uninstall() {
         local tmprc
         tmprc=$(mktemp "${HOME}/.bashrc.bem.XXXXXX") || die "Could not create temp file."
 
-        # Use sed to remove everything between the markers (inclusive)
-        sed '/^# bem:start$/,/^# bem:end$/d' ~/.bashrc > "$tmprc"
+        # Use awk to remove everything between the markers (inclusive)
+        awk '
+            /^# bem:start$/ { inizio = 1; blocco = $0 ORS; next }
+            inizio {
+                if (/^# bem:end$/) { inizio = 0; blocco = ""; next }
+                blocco = blocco $0 ORS
+                next
+            }
+            !inizio { print }
+            END { if (inizio) printf "%s", blocco }
+            ' ~/.bashrc > "$tmprc" || die "Could not process ~/.bashrc"
 
-        # Also clean up any trailing blank lines left behind
-        # (sed leaves them, we just do a simple cat)
         mv -f -- "$tmprc" ~/.bashrc
     fi
 
