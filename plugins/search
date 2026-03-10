@@ -91,11 +91,6 @@ fi
 IGNORE_DIRS=(.git node_modules build dist __pycache__ .svn .hg .tox .mypy_cache)
 
 # ── Build find command ───────────────────────────────────────────────────────
-#
-# The correct find pruning syntax requires grouping with parentheses:
-#   find DIR ( -name X -o -name Y ) -prune -o -type f ... -print
-#
-# The original script appended -prune -o per directory, which doesn't work.
 
 build_find_cmd() {
     local -a cmd=(find "$DIR" '(')
@@ -119,26 +114,16 @@ build_find_cmd() {
     printf '%s\0' "${cmd[@]}"
 }
 
-# Read the find command into an array safely
 FIND_CMD=()
 while IFS= read -r -d '' arg; do
     FIND_CMD+=("$arg")
 done < <(build_find_cmd)
 
-# ── Grep options ─────────────────────────────────────────────────────────────
-
-GREP_OPTS=(-F)  # Fixed string, no regex
-if [[ $IGNORE_CASE -eq 1 ]]; then
-    GREP_OPTS+=(-i)
-fi
-
 # ── Name search ──────────────────────────────────────────────────────────────
 
 search_by_name() {
-    local first_match=""
-
-    # Use grep -F on the filename to do literal matching (not glob).
-    # This avoids issues with special characters in QUERY.
+    # FIX: || true at the end so pipefail doesn't kill the script
+    # when find encounters permission errors on some subdirectories.
     "${FIND_CMD[@]}" -print 2>/dev/null | while IFS= read -r filepath; do
         local basename="${filepath##*/}"
 
@@ -149,13 +134,12 @@ search_by_name() {
             if [[ $COLOR -eq 1 ]]; then
                 local color_flags=(-F --color=always)
                 [[ $IGNORE_CASE -eq 1 ]] && color_flags+=(-i)
-                # Highlight the query in the full path
                 printf '%s\n' "$filepath" | grep "${color_flags[@]}" -- "$QUERY" || printf '%s\n' "$filepath"
             else
                 printf '%s\n' "$filepath"
             fi
         fi
-    done
+    done || true
 }
 
 # ── Content search ───────────────────────────────────────────────────────────
@@ -168,8 +152,6 @@ search_by_content() {
         grep_flags+=(--color=always)
     fi
 
-    # Collect files first, then grep. This is more reliable than -exec
-    # because it handles filenames with special characters correctly.
     "${FIND_CMD[@]}" -print0 2>/dev/null | xargs -0 grep "${grep_flags[@]}" -- "$QUERY" || true
 }
 
@@ -187,19 +169,26 @@ if [[ $OPEN -eq 1 ]]; then
     first_file=""
 
     if [[ "$MODE" == "name" ]]; then
-        first_file=$("${FIND_CMD[@]}" -print 2>/dev/null | while IFS= read -r filepath; do
-            local basename="${filepath##*/}"
-            local grep_flags=(-F -q)
-            [[ $IGNORE_CASE -eq 1 ]] && grep_flags+=(-i)
-            if printf '%s' "$basename" | grep "${grep_flags[@]}" -- "$QUERY"; then
-                printf '%s' "$filepath"
-                break
-            fi
-        done)
+        first_file=$({
+            "${FIND_CMD[@]}" -print 2>/dev/null | while IFS= read -r filepath; do
+                local basename="${filepath##*/}"
+                local grep_flags=(-F -q)
+                [[ $IGNORE_CASE -eq 1 ]] && grep_flags+=(-i)
+                if printf '%s' "$basename" | grep "${grep_flags[@]}" -- "$QUERY"; then
+                    printf '%s' "$filepath"
+                    break
+                fi
+            done
+        } || true)
     else
+        # FIX: replaced ${IGNORE_CASE:+-i} which ALWAYS expanded to -i
+        # because "0" is a non-empty string. Now we use a proper conditional.
+        local case_flag=""
+        [[ $IGNORE_CASE -eq 1 ]] && case_flag="-i"
+        # shellcheck disable=SC2086
         first_file=$("${FIND_CMD[@]}" -print0 2>/dev/null \
-            | xargs -0 grep -lF ${IGNORE_CASE:+-i} -- "$QUERY" 2>/dev/null \
-            | head -n1)
+            | xargs -0 grep -lF $case_flag -- "$QUERY" 2>/dev/null \
+            | head -n1 || true)
     fi
 
     if [[ -n "$first_file" ]]; then

@@ -1,211 +1,176 @@
 # bem — Bash Extension Manager
 
-A lightweight, secure tool for managing shell scripts and executables as plugins. Install, enable, disable, update, and remove scripts from a single command — with automatic alias generation, git-aware updates, and tab completion.
+A secure, lightweight tool for managing shell scripts as commands. Install, enable, disable, update, and remove scripts from a single interface.
 
-## Quick Start
+## Install
+
+**One command:**
 
 ```bash
-git clone https://github.com/<your-user>/bem.git ~/.local/share/bem
+bash <(curl -fsSL https://raw.githubusercontent.com/P4o1o/bem/main/install.sh)
+exec bash
+```
+
+This installs bem only. To also install the bundled plugins (`search`, `replace`):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/P4o1o/bem/main/install.sh) --full
+exec bash
+```
+
+**Manual install** (if you prefer to inspect first):
+
+```bash
+git clone https://github.com/P4o1o/bem.git ~/.local/share/bem
 cd ~/.local/share/bem
-chmod +x bem
 ./bem init
 exec bash
 ```
 
-After `init`, bem is available globally and comes with tab completion.
-
-### Install the bundled plugins
-
-```bash
-bem install plugins/search plugins/replace
-exec bash
-```
-
-Now `search` and `replace` are available as commands in your shell.
+> **Tip:** you can always install bundled plugins later with `bem install ~/.local/share/bem/plugins/search` etc.
 
 ## How It Works
 
-bem manages a registry of plugins under `~/.bem/plugins/`. Each plugin is a directory containing simple metadata files:
+bem creates **symlinks** in `~/.local/bin/` pointing to your scripts. No aliases, no `eval`, no sourced plugin code. The only file sourced in `.bashrc` is a ~1.8KB autocomplete function.
 
 ```
-~/.bem/plugins/<name>/
-├── enabled        # exists if plugin is active
-├── path           # absolute path to the script
-└── repo           # exists if inside a git repository
+~/.local/bin/
+├── bem     -> ~/.local/share/bem/bem
+├── search  -> ~/.local/share/bem/plugins/search
+└── replace -> ~/.local/share/bem/plugins/replace
 ```
-
-When you enable or install a plugin, bem regenerates `~/.bem/bem_source.bash` — a file sourced by your `.bashrc` that sets up aliases and autocompletion. No manual `PATH` editing needed.
 
 ## Commands
 
-### `bem install [-n <name>] <file> ...`
+### Lifecycle
 
-Install one or more scripts as plugins.
-
-```bash
-# Install with auto-detected name (filename minus .sh/.bash)
-bem install ~/scripts/myscript.sh
-
-# Install with a custom alias
-bem install -n deploy ~/work/deploy-production.sh
-
-# Install multiple at once
-bem install plugins/search plugins/replace
-```
-
-### `bem remove [-A] [-f] <name> ...`
-
-Remove plugins from the registry.
+**`bem install [-n <n>] <file> ...`** — Install scripts as plugins.
 
 ```bash
-bem remove search              # asks for confirmation
-bem remove -f search replace   # skip confirmation
-bem remove -Af old-tool        # also delete the original file
+bem install ~/scripts/myscript.sh             # name from filename
+bem install -n deploy ~/work/deploy-prod.sh   # custom name
 ```
 
-### `bem enable` / `bem disable`
+**`bem remove <name ...>`** — Unregister plugins from bem. Original files are kept.
 
-Toggle plugins on and off without removing them.
+**`bem purge <name ...>`** — Unregister AND permanently delete the original files.
 
-```bash
-bem disable replace     # deactivate
-bem enable replace      # reactivate
-exec bash               # apply changes
-```
+**`bem uninstall`** — Completely remove bem: all symlinks, all data, all `.bashrc` entries. Original plugin files are preserved. Requires double confirmation.
 
-### `bem list`
+### Control
 
-Show all installed plugins with their status and path.
+**`bem enable <name ...>`** / **`bem disable <name ...>`** — Toggle plugins on/off by creating or removing their symlink.
 
-```
-  search     [enabled]  <git>  /home/user/.local/share/bem/plugins/search
-  replace    [disabled]        /home/user/scripts/replace
-```
+### Info
 
-### `bem status <name> ...`
+**`bem list`** — Show all plugins with status.
 
-Detailed info for specific plugins, including whether the target file still exists and is executable.
+**`bem status <name ...>`** — Detailed info: file integrity, symlink health, world-writable warnings, git tracking.
 
-### `bem update <name> ...` / `bem update-all`
+**`bem help [name ...]`** — Show plugin documentation or the usage message.
 
-Pull the latest changes via git for plugins that live inside a repository.
+**`bem version`** — Show bem version.
 
-```bash
-bem update search         # update one
-bem update-all            # update all git-tracked plugins
-```
+### Updates
 
-### `bem self-update`
+**`bem update <name ...>`** — Git-pull specific plugins.
 
-Update bem itself (requires bem to be installed from a git clone).
+**`bem update-all`** — Git-pull all repo-tracked plugins.
 
-### `bem help <name> ...`
+**`bem upgradeable`** — Check which plugins have updates available without pulling them.
 
-Display documentation for a plugin. Looks for `README.md`, `README`, `HELP.md`, or any `.md`/`.txt` file in the plugin's directory.
-
-### `bem init`
-
-Set up the `~/.bem` directory, generate the source file, and link it to `~/.bashrc`. Safe to run multiple times.
+**`bem self-update`** — Update bem itself via git.
 
 ## Bundled Plugins
 
 ### search
 
-Fast file and content search with directory exclusions.
+Fast file and content search. All queries are literal strings.
 
 ```bash
-search main                        # find files with "main" in the name
-search -c 'TODO' -e py             # search for TODO inside .py files
-search -c -i --color error         # case-insensitive content search
-search -d ./src -e rs config       # search in a specific directory
-search -o main                     # open first match in $EDITOR
+search main                    # find files by name
+search -c 'TODO' -e py         # content search in .py files
+search -c -i --color error     # case-insensitive with highlights
+search -o main                 # open first match in $EDITOR
 ```
-**Options:** `-c` content mode, `-d` directory, `-e` extension filter, `-i` case-insensitive, `--color` colored output, `-o` open first match.
 
 ### replace
 
-Safe recursive find-and-replace. All strings are treated as **literals** — no regex, no metacharacter surprises.
+Safe recursive find-and-replace. Literal strings only — zero regex.
 
 ```bash
-replace foo bar ./src                          # basic replacement
-replace -i 'Hello World' 'Goodbye World' .    # case-insensitive
-replace -N --color 'std::cout' 'fmt::print' .  # dry run with matches
-replace -e js 'var ' 'const ' ./src            # only in .js files
+replace foo bar ./src
+replace '$PRICE' '€100' ./templates            # $ is literal
+replace 'C:\old\path' 'C:\new\path' ./configs  # backslashes are literal
+replace -N --color 'std::cout' 'fmt::print' .  # dry run
+replace -e js 'var ' 'const ' ./src            # extension filter
 ```
 
-**Options:** `-i` case-insensitive, `-n` dry run (files only), `-N` dry run (files + lines), `-j N` parallel jobs, `-e` extension filter, `--color` colored output.
+## External Plugins
 
-### ansicolor
-
-Print the ansi color table and other utils [Github repo](https://github.com/P4o1o/ansicolor)
-
-## Using External Plugins
-
-Plugins don't have to live in the bem repo. Any executable file on your system can be installed:
+Any executable file can be managed by bem:
 
 ```bash
-# From another git repository
-git clone https://github.com/someone/cool-tool.git ~/tools/cool-tool
-bem install -n cool ~/tools/cool-tool/cool.sh
-
-# bem detects it's in a git repo, so this works:
-bem update cool
+git clone https://github.com/someone/tool.git ~/tools/tool
+bem install -n mytool ~/tools/tool/script.sh
+bem update mytool       # auto-detected as git repo
+bem upgradeable         # check for new versions
 ```
 
 ## Security
 
-bem was designed with security as a priority:
+See [SECURITY.md](SECURITY.md) for the full security review covering: the symlink vs alias decision, input validation, world-writable detection, concurrency control, atomic writes, git safety, installer security, and known limitations.
 
-- **No `sed` on user input.** The source file is regenerated atomically from scratch on every change — never patched in-place with `sed` or string interpolation.
-- **Strict name validation.** Plugin names are restricted to `[a-zA-Z0-9._-]`, max 64 characters, with path traversal blocked.
-- **File locking.** Concurrent bem invocations are prevented via `flock`.
-- **Atomic writes.** The source file is written to a temp file first, then moved into place — no half-written state on crash.
-- **No eval, no unquoted expansion.** Aliases are generated with properly escaped single quotes.
-- **Binary detection.** The replace plugin skips binary files automatically.
-- **Literal matching.** Both `search` and `replace` use fixed-string matching (`grep -F`, `perl \Q`), so special characters in queries are never interpreted as patterns.
+Key points:
+- **Zero aliases.** Everything is a symlink — no shell parsing, no injection surface.
+- **~1.8KB sourced at startup.** Fixed size, never grows.
+- **100+ reserved command names** can't be shadowed.
+- **All destructive operations** (`remove`, `purge`, `uninstall`) require confirmation.
+- **`umask 077`** — all metadata is owner-only.
 
 ## Directory Structure
 
 ```
-bem/
-├── bem                  # the main tool
+~/.local/share/bem/          (installation)
+├── bem
 ├── plugins/
-│   ├── search           # bundled: file/content search
-│   └── replace          # bundled: safe find-and-replace
-├── LICENSE
+│   ├── search
+│   └── replace
+├── install.sh
+├── SECURITY.md
 └── README.md
-```
 
-After initialization:
-
-```
-~/.bem/
-├── bem_source.bash      # sourced by .bashrc (auto-generated)
-├── .lock                # flock file
+~/.bem/                      (runtime data)
+├── bem_source.bash          (~1.8KB, autocomplete only, read-only)
+├── .lock
 └── plugins/
-    ├── search/
-    │   ├── enabled
-    │   ├── path
-    │   └── repo
-    └── replace/
-        ├── path
-        └── repo
+    └── <n>/{enabled,path,repo}
+
+~/.local/bin/                (symlinks)
+├── bem -> ~/.local/share/bem/bem
+└── <n> -> /path/to/script
 ```
 
 ## Requirements
 
 - Bash 4.0+
-- Core utilities: `find`, `grep`, `flock`, `realpath`, `file`
+- `find`, `grep`, `flock`, `realpath`, `stat`, `ln`
 - `perl` (for the replace plugin)
-- `git` (only for update features)
+- `git` (for update/upgradeable features)
 
 ## Uninstall
 
 ```bash
-# Remove the source line from .bashrc
-sed -i "\|source.*bem_source.bash|d" ~/.bashrc
+bem uninstall
+exec bash
+```
 
-# Delete bem data
+Or manually:
+
+```bash
+for d in ~/.bem/plugins/*/; do [ -d "$d" ] || continue; n="${d%/}"; rm -f ~/.local/bin/"${n##*/}"; done
+rm -f ~/.local/bin/bem
+sed -i '/^# bem:start$/,/^# bem:end$/d' ~/.bashrc
 rm -rf ~/.bem
 ```
 

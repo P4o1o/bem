@@ -2,7 +2,7 @@
 #
 # replace — Safe recursive find-and-replace (literal strings, no regex).
 #
-# Uses perl for replacements to avoid all sed metacharacter issues.
+# Uses perl with index()/substr() for replacements to avoid ALL interpolation.
 # Both SEARCH and REPLACE are treated as literal strings, never as patterns.
 #
 
@@ -98,16 +98,8 @@ fi
 
 FIND_ARGS+=(-print0)
 
-# ── Build grep options for dry-run matching ──────────────────────────────────
-
-GREP_OPTS=(-F)  # -F = fixed strings, no regex interpretation
-if [[ $IGNORE_CASE -eq 1 ]]; then
-    GREP_OPTS+=(-i)
-fi
-
 # ── Process ──────────────────────────────────────────────────────────────────
 
-# Export what the worker needs.
 export SEARCH REPLACE IGNORE_CASE DRY_RUN SHOW_LINES COLOR
 
 process_file() {
@@ -119,11 +111,9 @@ process_file() {
     fi
 
     local grep_flags=(-F -q)
-    if [[ $IGNORE_CASE -eq 1 ]]; then
-        grep_flags+=(-i)
-    fi
+    [[ $IGNORE_CASE -eq 1 ]] && grep_flags+=(-i)
 
-    # Check if file contains the search string at all (fast bailout)
+    # Fast bailout: does the file even contain the search string?
     if ! grep "${grep_flags[@]}" -- "$SEARCH" "$f"; then
         return 0
     fi
@@ -142,24 +132,34 @@ process_file() {
             fi
         fi
     else
-        # Use perl for the actual replacement — treats search and replace
-        # as literal strings, completely avoiding delimiter/metachar issues.
-        local perl_search="$SEARCH"
-        local perl_replace="$REPLACE"
-        local perl_flags="g"
-        if [[ $IGNORE_CASE -eq 1 ]]; then
-            perl_flags="gi"
-        fi
-
+        # FIX: The previous version used  s/\Q$s/$r/g  which is UNSAFE because
+        # perl interpolates $, @, \n, \t etc. in the replacement part of s///.
+        # If REPLACE contained "$100", perl would interpret $1 as a capture group.
+        #
+        # This version uses index()+substr() — pure string operations with ZERO
+        # interpolation. No regex, no special characters, completely literal.
         perl -pi -e '
             BEGIN {
-                $s = $ENV{SEARCH};
-                $r = $ENV{REPLACE};
+                $s   = $ENV{SEARCH};
+                $r   = $ENV{REPLACE};
+                $ci  = $ENV{IGNORE_CASE};
+                $ls  = length($s);
+                $lr  = length($r);
+                $lcs = $ci ? lc($s) : $s;
             }
-            s/\Q$s/$r/'"${perl_flags}"'
+            my $pos = 0;
+            while (1) {
+                my $hay = $ci ? lc($_) : $_;
+                my $idx = index($hay, $lcs, $pos);
+                last if $idx == -1;
+                substr($_, $idx, $ls, $r);
+                $pos = $idx + $lr;
+            }
         ' -- "$f"
     fi
 }
 export -f process_file
 
-"${FIND_ARGS[@]}" | xargs -0 -n1 -P "$JOBS" bash -c 'process_file "$@"' _
+# FIX: || true so pipefail doesn't kill the script when find encounters
+# permission errors on some subdirectories.
+"${FIND_ARGS[@]}" | xargs -0 -n1 -P "$JOBS" bash -c 'process_file "$@"' _ || true
