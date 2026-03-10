@@ -3,22 +3,22 @@
 # bem installer
 #
 # Usage:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/P4o1o/bem/main/install.sh)
-#   bash <(curl -fsSL https://raw.githubusercontent.com/P4o1o/bem/main/install.sh) --full
+#   bash <(curl -fsSL https://raw.githubusercontent.com/<user>/bem/main/install.sh)
+#   bash <(curl -fsSL ...) --full
+#   bash <(curl -fsSL ...) -d ~/my/custom/path
+#   bash <(curl -fsSL ...) -d ~/my/custom/path --full
 #
 # Options:
-#   -f, --full    Also install bundled plugins (search, replace).
-#   -h, --help    Show this help.
-#
-# To inspect before running:
-#   curl -fsSL https://raw.githubusercontent.com/P4o1o/bem/main/install.sh | less
+#   -d, --dir DIR   Install location (default: ~/.local/share/bem)
+#   -f, --full      Also install bundled plugins (search, replace).
+#   -h, --help      Show this help.
 #
 
 set -euo pipefail
 umask 077
 
-readonly BEM_REPO="https://github.com/P4o1o/bem.git"
-readonly INSTALL_DIR="${HOME}/.local/share/bem"
+readonly BEM_REPO="https://github.com/<user>/bem.git"
+readonly DEFAULT_DIR="${HOME}/.local/share/bem"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 
@@ -35,40 +35,37 @@ die()  { printf '%sError: %s%s\n' "$R" "$*" "$N" >&2; exit 1; }
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 
-ESSENTIAL_INSTALL=false
 FULL_INSTALL=false
+INSTALL_DIR="$DEFAULT_DIR"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -f|--full) FULL_INSTALL=true ;;
-        -e|--essential) ESSENTIAL_INSTALL=true ;;
+        -d|--dir)
+            [[ $# -ge 2 ]] || die "--dir requires a path."
+            INSTALL_DIR="$2"; shift
+            ;;
         -h|--help)
             cat <<EOF
 ${B}bem installer${N}
 
 Usage:
-  bash install.sh                       bem only (RECOMMENDED)
-  bash install.sh ${G}--full${N}        bem + bundled plugins (search, replace)
-  bash install.sh ${G}--essential${N}   Download source code only (no git repo)
+  bash install.sh                          Install bem to default location.
+  bash install.sh ${G}--full${N}                   Also install bundled plugins.
+  bash install.sh ${G}-d ~/path${N}                Custom install location.
+  bash install.sh ${G}-d ~/path --full${N}         Both.
 
 Options:
-  -f, --full                            Also install bundled plugins.
-        
-  -e, --essential                       Download requested source code only,
-                                        not all the git repo. 'curl' must be
-                                        available to download the files.
-                                        Use this only if you don't want to
-                                        install git on your system.
-                                        Note: you won't get updates or be able
-                                        to contribute.
+  -d, --dir DIR   Where to clone bem (default: ${D}~/.local/share/bem${N}).
+  -f, --full      Also install bundled plugins (search, replace).
+  -h, --help      Show this help.
 
-  -h, --help                            Show this help.
+bem can live anywhere. The install directory is just where the git repo
+is cloned. bem creates a symlink in ~/.local/bin/ regardless.
 EOF
             exit 0
             ;;
-        *)
-            die "Unknown option: $1. Use -h for help."
-            ;;
+        *) die "Unknown option: $1. Use -h for help." ;;
     esac
     shift
 done
@@ -86,12 +83,6 @@ for cmd in git realpath flock; do
     command -v "$cmd" &>/dev/null || die "'${cmd}' is required but not found."
 done
 
-if [[ "$ESSENTIAL_INSTALL" == false ]]; then
-    command -v git &>/dev/null ||  die "git is required for normal installation but not found."
-else
-    command -v curl &>/dev/null || die "curl is required for essential installation but not found."
-fi
-
 if [[ "$FULL_INSTALL" == true ]]; then
     command -v perl &>/dev/null || warn "'perl' not found. The 'replace' plugin requires it."
 fi
@@ -100,49 +91,30 @@ fi
 
 if [[ -d "$INSTALL_DIR" ]]; then
     msg "Existing installation found at ${INSTALL_DIR}."
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
-        msg "Updating..."
-        if ! git -C "$INSTALL_DIR" pull --ff-only 2>&1; then
-            die "Failed to update. To reinstall: rm -rf ${INSTALL_DIR} && re-run."
-        fi
+    msg "Updating..."
+    if ! git -C "$INSTALL_DIR" pull --ff-only 2>&1; then
+        die "Failed to update. To reinstall: rm -rf ${INSTALL_DIR} && re-run."
     fi
 else
-    if [[ "$ESSENTIAL_INSTALL" == true ]]; then
-        msg "Downloading bem script to ${INSTALL_DIR}..."
-        mkdir -p "$(dirname "$INSTALL_DIR")"
-        curl -fsSL "${BEM_REPO}/raw/main/LICENSE" -o "${INSTALL_DIR}/LICENSE" \
-            || die "Failed to download the code LICENSE. Check your network and the URL."
-        curl -fsSL "${BEM_REPO}/raw/main/bem" -o "${INSTALL_DIR}/bem" \
-            || die "Failed to download bem script. Check your network and the URL."
-    else
-        msg "Cloning bem to ${INSTALL_DIR}..."
-        mkdir -p "$(dirname "$INSTALL_DIR")"
-        git clone --depth 1 "$BEM_REPO" "$INSTALL_DIR" \
-            || die "Failed to clone repository. Check your network and the URL."
-    fi
+    msg "Cloning bem to ${INSTALL_DIR}..."
+    mkdir -p "$(dirname "$INSTALL_DIR")"
+    git clone --depth 1 "$BEM_REPO" "$INSTALL_DIR" \
+        || die "Failed to clone repository."
 fi
 
-# Make bem executable
 chmod +x "${INSTALL_DIR}/bem"
 
-# Run init
+# Run init (this creates the symlink ~/.local/bin/bem -> INSTALL_DIR/bem)
 msg ""
 msg "Running ${B}bem init${N}..."
 bash "${INSTALL_DIR}/bem" init
 
-# ── Bundled plugins (only with --full) ───────────────────────────────────────
+# ── Bundled plugins ──────────────────────────────────────────────────────────
 
 if [[ "$FULL_INSTALL" == true ]]; then
     msg ""
     msg "Installing bundled plugins..."
-    if [[ "$ESSENTIAL_INSTALL" == true ]]; then
-        msg "Downloading bem plugins to ${INSTALL_DIR}/plugins..."
-        mkdir -p "${INSTALL_DIR}/plugins"
-        curl -fsSL "${BEM_REPO}/raw/main/plugins/search" -o "${INSTALL_DIR}/plugins/search" \
-            || die "Failed to download search plugin. Check your network and the URL."
-        curl -fsSL "${BEM_REPO}/raw/main/plugins/replace" -o "${INSTALL_DIR}/plugins/replace" \
-            || die "Failed to download replace plugin. Check your network and the URL."
-    fi
+
     for f in "${INSTALL_DIR}"/plugins/*; do
         [[ -f "$f" ]] || continue
         chmod +x "$f"
@@ -173,10 +145,3 @@ msg ""
 msg "Run ${B}exec bash${N} to apply changes, then:"
 msg "  ${G}bem help${N}          show all commands"
 msg "  ${G}bem list${N}          list installed plugins"
-
-if [[ "$FULL_INSTALL" == false && "$ESSENTIAL_INSTALL" == false ]]; then
-    msg ""
-    msg "To install bundled plugins later:"
-    msg "  ${G}bem install ${INSTALL_DIR}/plugins/search${N}"
-    msg "  ${G}bem install ${INSTALL_DIR}/plugins/replace${N}"
-fi
