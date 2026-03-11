@@ -1,6 +1,5 @@
-# Security Review — bem v1.0.0
-
-Last reviewed: 2025  
+# Security Review — bem v0.1.0
+  
 Scope: `bem`, `install.sh`, bundled plugins (`search`, `replace`)
 
 ---
