@@ -7,26 +7,26 @@ A secure, lightweight tool for managing shell scripts as commands.
 **One command** (clones to `~/.local/share/bem` by default):
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/<user>/bem/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/P4o1o/bem/main/install.sh)
 exec bash
 ```
 
 **With bundled plugins** (search, replace):
 
 ```bash
-bash <(curl -fsSL ...) --full
+bash <(curl -fsSL https://raw.githubusercontent.com/P4o1o/bem/main/install.sh) --full
 ```
 
 **Custom location** — bem can live wherever you want:
 
 ```bash
-bash <(curl -fsSL ...) -d ~/my-tools/bem --full
+bash <(curl -fsSL https://raw.githubusercontent.com/P4o1o/bem/main/install.sh) -d ~/my-tools/bem --full
 ```
 
 **Manual** (clone wherever you want, run init):
 
 ```bash
-git clone https://github.com/<user>/bem.git ~/wherever/you/want
+git clone https://github.com/P4o1o/bem.git ~/wherever/you/want
 cd ~/wherever/you/want
 ./bem init
 ./bem install plugins/search plugins/replace   # optional
