@@ -1,798 +1,250 @@
 #!/usr/bin/env bash
-#
-# bem — Bash Extension Manager
-#
-# Manages shell scripts/executables as plugins using symlinks in ~/.local/bin.
-# Zero aliases. bem itself is also a symlink — the only sourced content is
-# a small autocomplete function (~2KB).
-#
-# Storage:
-#   ~/.bem/plugins/<name>/{enabled,path,repo}   metadata
-#   ~/.local/bin/<name> -> /path/to/script       symlinks
-#
 
-set -euo pipefail
-umask 077
-
-readonly BEM_VERSION="0.1.0"
-readonly BEM_DIR="${HOME}/.bem"
-readonly PLUGINS_DIR="${BEM_DIR}/plugins"
-readonly BIN_DIR="${HOME}/.local/bin"
-readonly SOURCE_FILE="${BEM_DIR}/bem_source.bash"
-readonly LOCK_FILE="${BEM_DIR}/.lock"
-readonly NAME_MAX_LEN=64
-readonly NAME_REGEX='^[a-zA-Z0-9_][a-zA-Z0-9._-]*$'
-
-readonly RESERVED_NAMES='bash sh dash zsh fish csh tcsh ksh
-    ls cat cp mv rm mkdir rmdir chmod chown chgrp ln
-    grep sed awk find sort cut head tail tee wc tr
-    cd pwd echo printf test expr true false
-    ps kill top htop less more man which type
-    sudo su mount umount
-    git svn curl wget ssh scp rsync tar gzip gunzip zip unzip
-    python python3 perl ruby node npm java javac gcc g++ make cmake
-    vim vi nano emacs ed
-    apt apk yum dnf pacman brew pip gem cargo
-    systemctl service journalctl
-    iptables nft ufw
-    dd fdisk mkfs fsck
-    bem'
-
-# ── Colors ───────────────────────────────────────────────────────────────────
-
-if [[ -t 1 ]] && [[ "${TERM:-dumb}" != "dumb" ]]; then
-    readonly C_GREEN=$'\033[32m'  C_RED=$'\033[31m'
-    readonly C_SKY=$'\033[94m'    C_YELLOW=$'\033[33m'
-    readonly C_BOLD=$'\033[1m'    C_DIM=$'\033[2m'
-    readonly C_RESET=$'\033[0m'
-else
-    readonly C_GREEN="" C_RED="" C_SKY="" C_YELLOW="" C_BOLD="" C_DIM="" C_RESET=""
-fi
-
-# ── Utility ──────────────────────────────────────────────────────────────────
-
-msg()      { printf '%s\n' "$*"; }
-msg_ok()   { printf '%s%s%s\n' "$C_GREEN" "$*" "$C_RESET"; }
-msg_warn() { printf '%s%s%s\n' "$C_YELLOW" "$*" "$C_RESET" >&2; }
-msg_err()  { printf '%s%s%s\n' "$C_RED" "$*" "$C_RESET" >&2; }
-die()      { msg_err "Error: $*"; exit 1; }
-
-# Prompt for yes/no confirmation. Returns 0 for yes, 1 for no.
-confirm() {
-    local prompt="$1"
-    local answer
-    read -rp "${prompt} [y/N]: " answer
-    [[ "$answer" =~ ^[Yy]$ ]]
-}
-
-# Read a plugin's stored path without spawning a subshell.
-_read_path() {
-    local -n _ref=$1
-    local _pfile="${PLUGINS_DIR}/$2/path"
-    if [[ -f "$_pfile" ]]; then
-        IFS= read -r _ref < "$_pfile" || true
-    else
-        die "Plugin '$2' has no recorded path."
-    fi
-}
-
-acquire_lock() {
-    exec 9>"${LOCK_FILE}"
-    if ! flock -n 9; then
-        die "Another bem instance is running. If stuck, remove ${LOCK_FILE}"
-    fi
-}
-
-release_lock() {
-    flock -u 9 2>/dev/null || true
-    exec 9>&- 2>/dev/null || true
-}
-
-validate_name() {
-    local name="$1"
-    [[ -n "$name" ]] || die "Plugin name cannot be empty."
-    (( ${#name} <= NAME_MAX_LEN )) || die "Plugin name '${name}' exceeds ${NAME_MAX_LEN} characters."
-    [[ "$name" =~ $NAME_REGEX ]] || die "Plugin name '${name}' has invalid characters. Allowed: a-z A-Z 0-9 . _ - (no leading - or .)."
-
-    local reserved
-    for reserved in $RESERVED_NAMES; do
-        [[ "$name" != "$reserved" ]] || die "Plugin name '${name}' conflicts with a system command. Use -n to choose a different name."
-    done
-}
-
-validate_file_path() {
-    local raw_path="$1"
-    [[ -e "$raw_path" ]] || die "Path '${raw_path}' does not exist."
-    [[ -f "$raw_path" ]] || die "Path '${raw_path}' is not a regular file."
-    [[ -r "$raw_path" ]] || die "File '${raw_path}' is not readable."
-
-    local resolved
-    resolved=$(realpath  "$raw_path")
-
-    local perms
-    perms=$(stat -c '%a' "$resolved" 2>/dev/null) || true
-    if [[ -n "$perms" && "${perms: -1}" =~ [2367] ]]; then
-        msg_warn "Warning: '${resolved}' is world-writable (security risk)."
-        msg_warn "  Consider: chmod o-w '${resolved}'"
-    fi
-
-    printf '%s' "$resolved"
-}
-
-plugin_exists()     { [[ -d "${PLUGINS_DIR}/$1" ]]; }
-plugin_is_enabled() { [[ -f "${PLUGINS_DIR}/$1/enabled" ]]; }
-plugin_is_repo()    { [[ -f "${PLUGINS_DIR}/$1/repo" ]]; }
-
-check_initialized() {
-    [[ -d "$PLUGINS_DIR" ]] || die "bem is not initialized. Run: bem init"
-}
-
-# ── Symlink management ───────────────────────────────────────────────────────
-
-_create_link() {
-    local name="$1" target="$2"
-    local link="${BIN_DIR}/${name}"
-
-    if [[ -e "$link" && ! -L "$link" ]]; then
-        msg_err "'${link}' exists and is not a symlink. Refusing to overwrite."
-        return 1
-    fi
-    rm -f  "$link"
-    ln -s  "$target" "$link" || die "Could not create symlink '${link}'."
-}
-
-_remove_link() {
-    local link="${BIN_DIR}/$1"
-    if [[ -L "$link" ]]; then
-        rm -f  "$link"
-    elif [[ -e "$link" ]]; then
-        msg_warn "'${link}' is not a symlink managed by bem. Leaving it alone."
-    fi
-}
-
-_sync_links() {
-    local pdir name target
-    for pdir in "${PLUGINS_DIR}"/*/; do
-        [[ -d "$pdir" ]] || continue
-        name="${pdir%/}"; name="${name##*/}"
-
-        if [[ -f "${pdir}/enabled" && -f "${pdir}/path" ]]; then
-            IFS= read -r target < "${pdir}/path" || true
-            if [[ -f "$target" && -x "$target" ]]; then
-                _create_link "$name" "$target"
-            else
-                msg_warn "Plugin '${name}': target missing or not executable. Skipping."
-            fi
-        else
-            _remove_link "$name"
-        fi
-    done
-
-    # Clean stale symlinks we own
-    local link link_name
-    for link in "${BIN_DIR}"/*; do
-        [[ -L "$link" ]] || continue
-        [[ -e "$link" ]] && continue
-        link_name="${link##*/}"
-        if plugin_exists "$link_name"; then
-            rm -f  "$link"
-        fi
-    done
-}
-
-# ── Source file (autocomplete only) ──────────────────────────────────────────
-
-_regenerate_source() {
-    local tmpfile
-    tmpfile=$(mktemp "${BEM_DIR}/.bem_source.XXXXXX") || die "Could not create temp file."
-
-    cat > "$tmpfile" <<'AUTOCOMPLETE'
-# Auto-generated by bem — tab completion only.
-# All commands (bem + plugins) are symlinks in ~/.local/bin/.
-
-_bem_autocomplete() {
-    local cur prev
-    cur="${COMP_WORDS[COMP_CWORD]}"
-    prev="${COMP_WORDS[COMP_CWORD-1]}"
-
-    case "$prev" in
-        bem)
-            COMPREPLY=( $(compgen -W "install remove purge uninstall enable disable list status update update-all upgradeable self-update init help version"  "$cur") )
-            ;;
-        install)
-            COMPREPLY=( $(compgen -f  "$cur") )
-            ;;
-        enable)
-            local p="" d n
-            for d in ~/.bem/plugins/*/; do
-                [ -d "$d" ] || continue
-                n="${d%/}"; n="${n##*/}"
-                [ ! -f "${d}enabled" ] && p+="$n "
-            done
-            COMPREPLY=( $(compgen -W "$p"  "$cur") )
-            ;;
-        disable)
-            local p="" d n
-            for d in ~/.bem/plugins/*/; do
-                [ -d "$d" ] || continue
-                n="${d%/}"; n="${n##*/}"
-                [ -f "${d}enabled" ] && p+="$n "
-            done
-            COMPREPLY=( $(compgen -W "$p"  "$cur") )
-            ;;
-        update|upgradeable)
-            local p="" d n
-            for d in ~/.bem/plugins/*/; do
-                [ -d "$d" ] || continue
-                n="${d%/}"; n="${n##*/}"
-                [ -f "${d}repo" ] && p+="$n "
-            done
-            COMPREPLY=( $(compgen -W "$p"  "$cur") )
-            ;;
-        remove|rm|purge|help|status)
-            local p="" d n
-            for d in ~/.bem/plugins/*/; do
-                [ -d "$d" ] || continue
-                n="${d%/}"; n="${n##*/}"
-                p+="$n "
-            done
-            COMPREPLY=( $(compgen -W "$p"  "$cur") )
-            ;;
-    esac
-}
-complete -F _bem_autocomplete bem
-AUTOCOMPLETE
-
-    chmod 444 "$tmpfile"
-    mv -f  "$tmpfile" "${SOURCE_FILE}" || die "Could not update ${SOURCE_FILE}"
-}
-
-# ── Commands ─────────────────────────────────────────────────────────────────
-
-cmd_init() {
-    mkdir -p "${PLUGINS_DIR}" || die "Could not create ${PLUGINS_DIR}"
-    mkdir -p "${BIN_DIR}" || die "Could not create ${BIN_DIR}"
-    chmod 700 "${BEM_DIR}"
-
-    local bem_path
-    bem_path=$(realpath  "${BASH_SOURCE[0]}")
-    _create_link "bem" "$bem_path"
-
-    _regenerate_source
-
-    local path_line='export PATH="${HOME}/.local/bin:${PATH}"'
-    local bem_source_line="source '${SOURCE_FILE}'"
-
-    # Use block markers so uninstall can cleanly remove everything
-    if ! grep -Fxq '# bem:start' ~/.bashrc 2>/dev/null; then
-        local needs_path=false
-        if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
-            needs_path=true
-        fi
-        {
-            printf '\n# bem:start\n'
-            if [[ "$needs_path" == true ]]; then
-                printf '%s\n' "$path_line"
-            fi
-            printf '%s\n' "$bem_source_line"
-            printf '# bem:end\n'
-        } >> ~/.bashrc
-        msg "Linked to ~/.bashrc."
-    fi
-
-    _sync_links
-
-    msg_ok "bem initialized at ${BEM_DIR}."
-    msg "Run 'exec bash' to apply changes."
-}
-
-cmd_install() {
-    check_initialized
-    acquire_lock
-
-    local custom_name=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -n)
-                [[ $# -ge 2 ]] || die "-n requires an argument."
-                custom_name="$2"; shift 2
-                ;;
-            --)  shift; break ;;
-            -*)  die "Unknown option: $1" ;;
-            *)
-                _install_one "$1" "$custom_name"
-                custom_name=""; shift
-                ;;
-        esac
-    done
-    while [[ $# -gt 0 ]]; do
-        _install_one "$1" "$custom_name"
-        custom_name=""; shift
-    done
-
-    release_lock
-}
-
-_install_one() {
-    local raw_path="$1" custom_name="$2"
-    local resolved_path
-    resolved_path=$(validate_file_path "$raw_path")
-
-    local name
-    if [[ -n "$custom_name" ]]; then
-        name="$custom_name"
-    else
-        name="${resolved_path##*/}"
-        name="${name%.sh}"; name="${name%.bash}"
-    fi
-
-    validate_name "$name"
-    plugin_exists "$name" && { msg_err "Plugin '${name}' already exists. Remove it first or use -n."; return 1; }
-
-    if [[ -e "${BIN_DIR}/${name}" && ! -L "${BIN_DIR}/${name}" ]]; then
-        die "'${BIN_DIR}/${name}' already exists and is not a symlink. Use -n to choose a different name."
-    fi
-
-    if [[ ! -x "$resolved_path" ]]; then
-        msg_warn "'${resolved_path}' is not executable. Setting u+x."
-        chmod u+x "$resolved_path" || die "Could not make '${resolved_path}' executable."
-    fi
-
-    local pdir="${PLUGINS_DIR}/${name}"
-    mkdir -p "$pdir"
-    printf '%s\n' "$resolved_path" > "${pdir}/path"
-    touch "${pdir}/enabled"
-
-    local file_dir
-    file_dir=$(dirname "$resolved_path")
-    if git -C "$file_dir" rev-parse --is-inside-work-tree &>/dev/null; then
-        touch "${pdir}/repo"
-    fi
-
-    _create_link "$name" "$resolved_path"
-    msg_ok "Installed '${name}' -> ${resolved_path}"
-}
-
-# remove: unregister plugin from bem, delete symlink. Keep original files.
-cmd_remove() {
-    check_initialized
-    acquire_lock
-    [[ $# -gt 0 ]] || die "Usage: bem remove <plugin_name ...>"
-
-    local plugin target
-    for plugin in "$@"; do
-        validate_name "$plugin"
-        plugin_exists "$plugin" || { msg_err "Plugin '${plugin}' not found."; continue; }
-
-        _read_path target "$plugin"
-
-        if ! confirm "Remove '${plugin}' from bem? (original file '${target}' will be kept)"; then
-            msg "Skipping '${plugin}'."; continue
-        fi
-
-        _remove_link "$plugin"
-        rm -rf  "${PLUGINS_DIR:?}/${plugin}"
-        msg_ok "Removed '${plugin}'. Original file preserved at: ${target}"
-    done
-
-    release_lock
-}
-
-# purge: unregister plugin AND delete the original file.
-cmd_purge() {
-    check_initialized
-    acquire_lock
-    [[ $# -gt 0 ]] || die "Usage: bem purge <plugin_name ...>"
-
-    local plugin target
-    for plugin in "$@"; do
-        validate_name "$plugin"
-        plugin_exists "$plugin" || { msg_err "Plugin '${plugin}' not found."; continue; }
-
-        _read_path target "$plugin"
-
-        msg_warn "This will remove '${plugin}' from bem AND permanently delete:"
-        msg_warn "  ${target}"
-
-        if ! confirm "Proceed?"; then
-            msg "Skipping '${plugin}'."; continue
-        fi
-
-        _remove_link "$plugin"
-
-        if [[ -f "$target" ]]; then
-            rm -f  "$target" && msg "Deleted '${target}'."
-        elif [[ -e "$target" ]]; then
-            msg_warn "'${target}' is not a regular file. Not deleting."
-        else
-            msg_warn "'${target}' already does not exist."
-        fi
-
-        rm -rf  "${PLUGINS_DIR:?}/${plugin}"
-        msg_ok "Purged '${plugin}'."
-    done
-
-    release_lock
-}
-
-# uninstall: remove all plugins, all data, all traces of bem.
-cmd_uninstall() {
-    msg_warn "This will completely uninstall bem and remove all associated data:"
-    msg_warn "  - All plugin symlinks in ${BIN_DIR}/"
-    msg_warn "  - The bem symlink in ${BIN_DIR}/bem"
-    msg_warn "  - All data in ${BEM_DIR}/"
-    msg_warn "  - Lines added to ~/.bashrc by bem"
-    msg_warn ""
-    msg_warn "Original plugin files will NOT be deleted."
-    msg ""
-
-    confirm "Are you sure you want to uninstall bem?" || { msg "Aborted."; return 0; }
-    confirm "This cannot be undone. Type 'y' again to confirm." || { msg "Aborted."; return 0; }
-
-    # Remove all plugin symlinks
-    if [[ -d "$PLUGINS_DIR" ]]; then
-        local pdir name
-        for pdir in "${PLUGINS_DIR}"/*/; do
-            [[ -d "$pdir" ]] || continue
-            name="${pdir%/}"; name="${name##*/}"
-            _remove_link "$name"
-        done
-    fi
-
-    # Remove bem symlink
-    _remove_link "bem"
-
-    # Clean .bashrc — remove the bem:start/bem:end block
-    if [[ -f ~/.bashrc ]]; then
-        local tmprc
-        tmprc=$(mktemp "${HOME}/.bashrc.bem.XXXXXX") || die "Could not create temp file."
-
-        # Use awk to remove everything between the markers (inclusive)
-        awk '
-            /^# bem:start$/ { inizio = 1; blocco = $0 ORS; next }
-            inizio {
-                if (/^# bem:end$/) { inizio = 0; blocco = ""; next }
-                blocco = blocco $0 ORS
-                next
-            }
-            !inizio { print }
-            END { if (inizio) printf "%s", blocco }
-            ' ~/.bashrc > "$tmprc" || die "Could not process ~/.bashrc"
-
-        mv -f  "$tmprc" ~/.bashrc
-    fi
-
-    # Remove bem data directory
-    rm -rf  "${BEM_DIR}"
-
-    msg_ok "bem has been uninstalled."
-    msg "Run 'exec bash' to apply changes."
-    msg "Your original plugin files have been preserved."
-}
-
-cmd_enable() {
-    check_initialized
-    acquire_lock
-
-    local plugin target
-    for plugin in "$@"; do
-        validate_name "$plugin"
-        plugin_exists "$plugin" || { msg_err "Plugin '${plugin}' not found."; continue; }
-
-        _read_path target "$plugin"
-        [[ -f "$target" ]] || { msg_err "Plugin '${plugin}': target '${target}' is missing."; continue; }
-
-        touch "${PLUGINS_DIR}/${plugin}/enabled"
-        _create_link "$plugin" "$target"
-        msg_ok "Enabled '${plugin}'."
-    done
-
-    release_lock
-}
-
-cmd_disable() {
-    check_initialized
-    acquire_lock
-
-    local plugin
-    for plugin in "$@"; do
-        validate_name "$plugin"
-        plugin_exists "$plugin" || { msg_err "Plugin '${plugin}' not found."; continue; }
-
-        rm -f "${PLUGINS_DIR}/${plugin}/enabled"
-        _remove_link "$plugin"
-        msg_ok "Disabled '${plugin}'."
-    done
-
-    release_lock
-}
-
-cmd_list() {
-    check_initialized
-
-    local count=0 pdir name target status link_info repo_tag
-    for pdir in "${PLUGINS_DIR}"/*/; do
-        [[ -d "$pdir" ]] || continue
-        name="${pdir%/}"; name="${name##*/}"
-
-        if [[ -f "${pdir}/enabled" ]]; then
-            status="${C_GREEN}enabled${C_RESET}"
-            if [[ -L "${BIN_DIR}/${name}" ]]; then
-                link_info=" -> ${C_SKY}${name}${C_RESET}"
-            else
-                link_info=" ${C_YELLOW}(symlink missing!)${C_RESET}"
-            fi
-        else
-            status="${C_RED}disabled${C_RESET}"
-            link_info=""
-        fi
-
-        repo_tag=""
-        [[ -f "${pdir}/repo" ]] && repo_tag=" ${C_SKY}<git>${C_RESET}"
-
-        target=""
-        [[ -f "${pdir}/path" ]] && { IFS= read -r target < "${pdir}/path" || true; }
-
-        printf '  %-30s [%b]%b  %s%b\n' "$name" "$status" "$repo_tag" "$target" "$link_info"
-        count=$((count + 1))
-    done
-
-    if (( count == 0 )); then
-        msg "No plugins installed."
-    fi
-}
-
-cmd_status() {
-    check_initialized
-    [[ $# -gt 0 ]] || die "Usage: bem status <plugin_name ...>"
-
-    local plugin target file_status link link_status link_target status repo_info perms
-    for plugin in "$@"; do
-        validate_name "$plugin"
-        plugin_exists "$plugin" || { msg_err "Plugin '${plugin}' not found."; continue; }
-
-        status="disabled"
-        plugin_is_enabled "$plugin" && status="enabled"
-        repo_info="no"
-        plugin_is_repo "$plugin" && repo_info="yes"
-
-        _read_path target "$plugin"
-
-        file_status="OK"
-        if [[ ! -f "$target" ]]; then
-            file_status="${C_RED}MISSING${C_RESET}"
-        elif [[ ! -x "$target" ]]; then
-            file_status="${C_YELLOW}NOT EXECUTABLE${C_RESET}"
-        else
-            perms=$(stat -c '%a' "$target" 2>/dev/null) || true
-            if [[ -n "$perms" && "${perms: -1}" =~ [2367] ]]; then
-                file_status="${C_YELLOW}WORLD-WRITABLE${C_RESET}"
-            fi
-        fi
-
-        link="${BIN_DIR}/${plugin}"
-        link_status="none"
-        if [[ -L "$link" ]]; then
-            link_target=$(readlink -f "$link" 2>/dev/null || echo "broken")
-            if [[ "$link_target" == "$target" ]]; then
-                link_status="${C_GREEN}OK${C_RESET}"
-            else
-                link_status="${C_YELLOW}STALE${C_RESET} (-> ${link_target})"
-            fi
-        elif [[ -e "$link" ]]; then
-            link_status="${C_RED}CONFLICT${C_RESET} (not a symlink)"
-        fi
-
-        printf '%s:\n' "$plugin"
-        printf '  Status:     %s\n' "$status"
-        printf '  Path:       %s\n' "$target"
-        printf '  File:       %b\n' "$file_status"
-        printf '  Symlink:    %b\n' "$link_status"
-        printf '  Git repo:   %s\n' "$repo_info"
-        echo
-    done
-}
-
-cmd_update() {
-    check_initialized
-    [[ $# -gt 0 ]] || die "Usage: bem update <plugin_name ...>"
-
-    local plugin target target_dir
-    for plugin in "$@"; do
-        validate_name "$plugin"
-        plugin_exists "$plugin" || { msg_err "Plugin '${plugin}' not found."; continue; }
-        plugin_is_repo "$plugin" || { msg_warn "'${plugin}' is not git-tracked. Skipping."; continue; }
-
-        _read_path target "$plugin"
-        target_dir=$(dirname "$target")
-
-        if ! git -C "$target_dir" rev-parse --is-inside-work-tree &>/dev/null; then
-            msg_err "'${plugin}' is no longer in a git repository."
-            rm -f "${PLUGINS_DIR}/${plugin}/repo"
-            continue
-        fi
-
-        msg "Updating '${plugin}'..."
-        if git -C "$target_dir" pull --ff-only; then
-            msg_ok "Updated '${plugin}'."
-        else
-            msg_err "Failed to update '${plugin}'. Manual intervention may be needed."
-        fi
-    done
-}
-
-cmd_update_all() {
-    check_initialized
-
-    local found=false pdir name
-    for pdir in "${PLUGINS_DIR}"/*/; do
-        [[ -d "$pdir" ]] || continue
-        name="${pdir%/}"; name="${name##*/}"
-        if [[ -f "${pdir}/repo" ]]; then
-            found=true
-            cmd_update "$name"
-        fi
-    done
-    [[ "$found" == true ]] || msg "No git-tracked plugins found."
-}
-
-# upgradeable: check which git-tracked plugins have remote changes available.
-cmd_upgradeable() {
-    check_initialized
-
-    local count=0 pdir name target target_dir local_head remote_head
-
-    for pdir in "${PLUGINS_DIR}"/*/; do
-        [[ -d "$pdir" ]] || continue
-        [[ -f "${pdir}/repo" ]] || continue
-
-        name="${pdir%/}"; name="${name##*/}"
-        IFS= read -r target < "${pdir}/path" || true
-        target_dir=$(dirname "$target")
-
-        # Verify still a git repo
-        if ! git -C "$target_dir" rev-parse --is-inside-work-tree &>/dev/null; then
-            continue
-        fi
-
-        # Fetch remote refs without merging (lightweight, safe)
-        if ! git -C "$target_dir" fetch --quiet 2>/dev/null; then
-            msg_warn "'${name}': could not reach remote. Skipping."
-            continue
-        fi
-
-        # Compare local HEAD with upstream tracking branch
-        local_head=$(git -C "$target_dir" rev-parse HEAD 2>/dev/null) || continue
-        remote_head=$(git -C "$target_dir" rev-parse '@{upstream}' 2>/dev/null) || continue
-
-        if [[ "$local_head" != "$remote_head" ]]; then
-            local behind
-            behind=$(git -C "$target_dir" rev-list --count HEAD..'@{upstream}' 2>/dev/null) || behind="?"
-            printf '  %-30s %s commit(s) behind\n' "$name" "$behind"
-            count=$((count + 1))
-        fi
-    done
-
-    if (( count == 0 )); then
-        msg_ok "All git-tracked plugins are up to date."
-    else
-        msg ""
-        msg "Run 'bem update <name>' or 'bem update-all' to update."
-    fi
-}
-
-cmd_self_update() {
-    local bem_path bem_dir
-    bem_path=$(realpath  "${BASH_SOURCE[0]}")
-    bem_dir=$(dirname "$bem_path")
-
-    git -C "$bem_dir" rev-parse --is-inside-work-tree &>/dev/null \
-        || die "bem is not installed from a git repository."
-
-    msg "Updating bem..."
-    if git -C "$bem_dir" pull --ff-only; then
-        _create_link "bem" "$bem_path"
-        _regenerate_source
-        msg_ok "bem updated successfully."
-    else
-        die "Failed to update bem."
-    fi
-}
-
-cmd_help() {
-    check_initialized
-
-    local plugin target plugin_dir doc_file candidate
-    for plugin in "$@"; do
-        validate_name "$plugin"
-        plugin_exists "$plugin" || { msg_err "Plugin '${plugin}' not found."; continue; }
-
-        _read_path target "$plugin"
-        plugin_dir=$(dirname "$target")
-        [[ -d "$plugin_dir" ]] || { msg_err "Directory '${plugin_dir}' does not exist."; continue; }
-
-        doc_file=""
-        for candidate in "${plugin_dir}/README.md" "${plugin_dir}/README" \
-                         "${plugin_dir}/HELP.md" "${plugin_dir}/HELP.txt" \
-                         "${plugin_dir}"/*.md "${plugin_dir}"/*.txt; do
-            if [[ -f "$candidate" && -r "$candidate" ]]; then
-                doc_file="$candidate"; break
-            fi
-        done
-
-        if [[ -n "$doc_file" ]]; then
-            msg "── ${plugin} ──"
-            ${PAGER:-less}  "$doc_file"
-        else
-            msg_warn "No documentation found for '${plugin}'."
-        fi
-    done
-}
-
-# ── Usage ────────────────────────────────────────────────────────────────────
+BEM_VERSION='0.1.0'
+BEM_HOME="$HOME/.bem"
+BEM_LINKS="$BEM_HOME/bin"
+NAME_MAX=64
+NAME_RE='^[a-zA-Z0-9_][a-zA-Z0-9._-]*$'
 
 usage() {
-    cat <<EOF
-${C_BOLD}bem${C_RESET} — Bash Extension Manager ${C_DIM}v${BEM_VERSION}${C_RESET}
+	cat <<EOF
+bem v$BEM_VERSION
 
-Usage: ${C_GREEN}bem${C_RESET} <command> [options] [arguments]
+usage:
+  bem init
+  bem install [-n name] file ...
+  bem remove name ...
+  bem rm name ...
+  bem list
+  bem ls
+  bem status name ...
+  bem uninstall-bem
+  bem version
+  bem help
 
-Plugins are symlinks in ${C_SKY}~/.local/bin/${C_RESET} — changes take effect immediately.
-
-${C_BOLD}Lifecycle:${C_RESET}
-  ${C_SKY}init${C_RESET}                               Initialize the bem environment.
-  ${C_SKY}install${C_RESET} [-n <name>] <file> ...  Install scripts as plugins.
-  ${C_SKY}remove${C_RESET}  <name ...>                 Unregister plugins (keep original files).
-  ${C_SKY}purge${C_RESET}   <name ...>                 Unregister AND delete original files.
-  ${C_SKY}uninstall${C_RESET}                          Remove bem itself and all data.
-
-${C_BOLD}Control:${C_RESET}
-  ${C_SKY}enable${C_RESET}  <name ...>                 Enable plugins (create symlink).
-  ${C_SKY}disable${C_RESET} <name ...>                 Disable plugins (remove symlink).
-
-${C_BOLD}Info:${C_RESET}
-  ${C_SKY}list${C_RESET}                               List all plugins.
-  ${C_SKY}status${C_RESET}  <name ...>                 Show detailed plugin info.
-  ${C_SKY}help${C_RESET}    [name ...]                 Show plugin docs or this message.
-  ${C_SKY}version${C_RESET}                            Show bem version.
-
-${C_BOLD}Updates:${C_RESET}
-  ${C_SKY}update${C_RESET}  <name ...>                 Git-pull specific plugins.
-  ${C_SKY}update-all${C_RESET}                         Git-pull all repo-tracked plugins.
-  ${C_SKY}upgradeable${C_RESET}                        Show plugins with available updates.
-  ${C_SKY}self-update${C_RESET}                        Update bem itself via git.
-
-Valid names: a-z A-Z 0-9 . _ - (max ${NAME_MAX_LEN} chars). System commands are reserved.
+exit codes:
+  0   ok
+  64  usage error
+  65  invalid name/data
+  66  missing or unreadable input
+  69  conflict/unavailable
+  73  could not create file/dir/symlink
+  74  I/O error
 EOF
 }
 
-# ── Main ─────────────────────────────────────────────────────────────────────
-
-main() {
-    [[ $# -ge 1 ]] || { usage; exit 1; }
-
-    local command="$1"; shift
-    case "$command" in
-        init)         cmd_init "$@" ;;
-        install)      cmd_install "$@" ;;
-        remove|rm)    cmd_remove "$@" ;;
-        purge)        cmd_purge "$@" ;;
-        uninstall)    cmd_uninstall "$@" ;;
-        enable)       cmd_enable "$@" ;;
-        disable)      cmd_disable "$@" ;;
-        list|ls)      cmd_list "$@" ;;
-        status)       cmd_status "$@" ;;
-        update)       cmd_update "$@" ;;
-        update-all)   cmd_update_all "$@" ;;
-        upgradeable)  cmd_upgradeable "$@" ;;
-        self-update)  cmd_self_update "$@" ;;
-        version)      msg "bem v${BEM_VERSION}" ;;
-        help)
-            if [[ $# -gt 0 ]]; then cmd_help "$@"
-            else usage; fi
-            ;;
-        *)  msg_err "Unknown command: ${command}"; usage; exit 1 ;;
-    esac
+die() {
+    echo "bem: $1" >&2
+    exit "$2"
 }
 
-main "$@"
+if (($# == 0)); then
+	usage
+	exit 64
+fi
+
+cmd=$1
+shift
+
+case $cmd in
+    init)
+        [[ -e "$BEM_HOME" && ! -d "$BEM_HOME"  ]] && die "conflict: $BEM_HOME exists and is not a directory" 69 
+	    mkdir -p "$BEM_HOME" || die "could not create $BEM_HOME" 73
+	    mkdir -p "$BEM_LINKS" || die "could not create $BEM_LINKS" 73
+	    self=$(realpath "$0") || die 'could not resolve bem path' 74
+	    self_dir=${self%/*}
+	    if [[ ! -L "$BEM_LINKS/bem" ]]; then
+            [[ -e "$BEM_LINKS/bem" ]] && die "conflict: delete $BEM_LINKS/bem; corrupted installation" 69
+            ln -s "$self" "$BEM_LINKS/bem" || die "could not create $BEM_LINKS/bem" 73
+        fi
+        completion="$BEM_HOME/bem_completion"
+        completion_tmp="$BEM_HOME/bem_completion.$$"
+
+        cat > "$completion_tmp" <<'EOF' || die "could not write $completion_tmp" 73
+#!/usr/bin/env bash
+
+_bem_autocomplete() {
+	local cur cmd link name names commands
+
+	cur=${COMP_WORDS[COMP_CWORD]}
+	cmd=${COMP_WORDS[1]}
+
+	commands='init install remove rm list ls status uninstall-bem version help'
+
+	if ((COMP_CWORD == 1)); then
+		COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+		return
+	fi
+
+	case $cmd in
+		install)
+			case ${COMP_WORDS[COMP_CWORD-1]} in
+				-n)
+					COMPREPLY=()
+					;;
+				*)
+					COMPREPLY=($(compgen -f -- "$cur"))
+					;;
+			esac
+			;;
+
+		remove|rm|status)
+			names=
+
+			for link in "$HOME/.bem/bin"/*; do
+				[[ -L $link ]] || continue
+
+				name=${link##*/}
+				[[ $name == bem ]] && continue
+
+				names+="$name "
+			done
+
+			COMPREPLY=($(compgen -W "$names" -- "$cur"))
+			;;
+
+		help)
+			COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+			;;
+
+		*)
+			COMPREPLY=()
+			;;
+	esac
+}
+
+complete -F _bem_autocomplete bem
+
+EOF
+        chmod 444 "$completion_tmp" || die "could not chmod $completion_tmp" 74
+        mv -f "$completion_tmp" "$completion" || die "could not create $completion" 73
+	    echo "bem initialized in $BEM_LINKS"
+	    echo 'add these lines to your .bashrc file for tab completion:'
+        echo "  export PATH=\"$BEM_LINKS:\$PATH\""
+	    echo "  source \"$completion\""
+	    ;;
+
+    install)
+        [[ -d "$BEM_LINKS" ]] || die "bem is not initialized; run 'bem init'" 69 
+	    (($# > 0)) || die 'usage: bem install [-n name] file ...' 64
+        name=
+        file=
+        while (($# > 0)); do
+            case $1 in
+                -n)
+                    (($# > 1)) || die '-n requires a name' 64
+                    [[ -z $name ]] || die "-n '$name' requires a file" 64
+                    name=$2
+                    shift 2
+                    ;;
+                -*)
+                    die "unknown option: $1" 64
+                    ;;
+                *)
+                    file=$1
+                    shift
+                    [[ -f $file && -r $file ]] || die "not a readable file: $file" 66
+                    path=$(realpath "$file") || die "could not resolve $file" 74
+                    if [[ -z $name ]]; then
+                        name=${path##*/}
+                    fi
+                    [[ $name =~ $NAME_RE ]] || die "invalid name for program: $name" 65
+                    ((${#name} <= NAME_MAX)) || die "name too long: $name" 65
+                    link="$BEM_LINKS/$name"
+                    [[ ! -e $link && ! -L $link ]] || die "already exists: $link" 69
+                    type "$name" >/dev/null 2>&1 && die "command already exists: $name" 69
+                    [[ -x $path ]] || die "you don't have execution permission for $path" 74
+                    ln -s "$path" "$link" || die "could not create $link" 73
+                    echo "$name -> $path"
+                    name=
+                    ;;
+            esac
+        done
+        [[ -z $name ]] || die '-n requires a file' 64
+        ;;
+    remove|rm)
+        [[ -d "$BEM_LINKS" ]] || die "bem is not initialized; run 'bem init'" 69 
+	    (($# > 0)) || die 'usage: bem remove name ...' 64
+	    for name in "$@"; do
+            if [[ ! $name =~ $NAME_RE ]]; then
+                die "invalid name for program: $name" 65
+    		elif [[ ! -L "$BEM_LINKS/$name" ]]; then
+	    	    die "not found: $name" 66
+            fi
+        done
+        for name in "$@"; do
+			rm -f "$BEM_LINKS/$name" || die "could not remove $BEM_LINKS/$name" 74
+			echo "removed: $name"
+        done
+	    ;;
+
+    list|ls)
+        [[ -d "$BEM_LINKS" ]] || die "bem is not initialized; run 'bem init'" 69 
+	    found=false
+        code=0
+    	for link in "$BEM_LINKS"/*; do
+		    if [[ -L $link ]]; then
+                if target=$(readlink "$link"); then
+                    echo "${link##*/} -> $target"
+		            found=true
+                else
+                    echo "bem: could not read $link" >&2
+                    code=74
+                fi
+            fi
+	    done
+	    $found || echo 'no plugins installed'
+        exit "$code"
+	    ;;
+    status)
+        [[ -d "$BEM_LINKS" ]] || die "bem is not initialized; run 'bem init'" 69 
+	    (($# > 0)) || die 'usage: bem status name ...' 64
+        code=0
+	    for name in "$@"; do
+            link="$BEM_LINKS/$name"
+            if [[ ! $name =~ $NAME_RE ]]; then
+                echo "bem: invalid name for program: $name" >&2
+	            code=65
+            elif [[ -L "$link" ]]; then
+			    if target=$(readlink "$link"); then
+                    echo "$name: '$link' -> '$target'"
+                else
+                    echo "bem: could not read symlink $link" >&2
+                    code=74
+                fi
+            else
+                echo "$name: not found" >&2
+                code=66
+            fi
+        done
+        exit "$code"
+    	;;
+    uninstall-bem)
+        [[ -L "$BEM_LINKS/bem" ]] || die "bem is not initialized; run 'bem init'" 69 
+        bem_file=$(readlink "$BEM_LINKS/bem") || die "could not read symlink $BEM_LINKS/bem" 74
+        code=0
+        for link in "$BEM_LINKS"/*; do
+		    if [[ -L $link ]]; then
+                rm -f "$link" || {
+                    echo "bem: could not remove $link" >&2
+                    code=74
+                }
+            fi
+        done
+        bem_dir=${bem_file%/*}
+        echo "bem uninstalled"
+        echo "remove these lines from your .bashrc file, if present:"
+	    echo "  export PATH=\"$BEM_LINKS:\$PATH\""
+	    echo "  source \"$bem_dir/bem_completion\""
+        exit "$code"
+        ;;
+    version|--version|-v)
+	    echo "bem v$BEM_VERSION"
+	    ;;
+    help|-h|--help)
+    	usage
+	    ;;
+    *)
+	    die "unknown command: $cmd" 64
+	    ;;
+esac
