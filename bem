@@ -252,6 +252,7 @@ EOF
             esac
         done
         [[ -z $name ]] || die '-n requires a file' 64
+        echo "run 'exec bash' to apply the changes"
         ;;
     desource)
         [[ -d "$BEM_SOURCES" ]] || die "bem is not initialized; run 'bem init'" 69 
@@ -267,6 +268,7 @@ EOF
 			rm -f "$BEM_SOURCES/$name" || die "could not remove $BEM_SOURCES/$name" 74
 			echo "removed: $name"
         done
+        echo "run 'exec bash' to apply the changes"
 	    ;;
     list|ls)
         [[ -d "$BEM_LINKS" ]] || die "bem is not initialized; run 'bem init'" 69 
