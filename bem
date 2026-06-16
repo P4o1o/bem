@@ -3,6 +3,7 @@
 BEM_VERSION='0.1.0'
 BEM_HOME="$HOME/.bem"
 BEM_LINKS="$BEM_HOME/bin"
+BEM_SOURCES="$BEM_HOME/source"
 NAME_MAX=64
 NAME_RE='^[a-zA-Z0-9_][a-zA-Z0-9._-]*$'
 
@@ -14,7 +15,8 @@ usage:
   bem init
   bem install [-n name] file ...
   bem remove name ...
-  bem rm name ...
+  bem source [-n name] file ...
+  bem desource name ...
   bem list
   bem ls
   bem status name ...
@@ -51,6 +53,7 @@ case $cmd in
         [[ -e "$BEM_HOME" && ! -d "$BEM_HOME"  ]] && die "conflict: $BEM_HOME exists and is not a directory" 69 
 	    mkdir -p "$BEM_HOME" || die "could not create $BEM_HOME" 73
 	    mkdir -p "$BEM_LINKS" || die "could not create $BEM_LINKS" 73
+	    mkdir -p "$BEM_SOURCES" || die "could not create $BEM_SOURCES" 73
 	    self=$(realpath "$0") || die 'could not resolve bem path' 74
 	    self_dir=${self%/*}
 	    if [[ ! -L "$BEM_LINKS/bem" ]]; then
@@ -69,7 +72,7 @@ _bem_autocomplete() {
 	cur=${COMP_WORDS[COMP_CWORD]}
 	cmd=${COMP_WORDS[1]}
 
-	commands='init install remove rm list ls status uninstall-bem version help'
+	commands='init install source remove rm desource list ls status uninstall-bem version help'
 
 	if ((COMP_CWORD == 1)); then
 		COMPREPLY=($(compgen -W "$commands" -- "$cur"))
@@ -77,18 +80,19 @@ _bem_autocomplete() {
 	fi
 
 	case $cmd in
-		install)
+		install|source)
 			case ${COMP_WORDS[COMP_CWORD-1]} in
 				-n)
 					COMPREPLY=()
 					;;
 				*)
+					compopt -o filenames 2>/dev/null
 					COMPREPLY=($(compgen -f -- "$cur"))
 					;;
 			esac
 			;;
 
-		remove|rm|status)
+		remove|rm)
 			names=
 
 			for link in "$HOME/.bem/bin"/*; do
@@ -97,6 +101,41 @@ _bem_autocomplete() {
 				name=${link##*/}
 				[[ $name == bem ]] && continue
 
+				names+="$name "
+			done
+
+			COMPREPLY=($(compgen -W "$names" -- "$cur"))
+			;;
+
+		desource)
+			names=
+
+			for link in "$HOME/.bem/source"/*; do
+				[[ -L $link ]] || continue
+
+				name=${link##*/}
+				names+="$name "
+			done
+
+			COMPREPLY=($(compgen -W "$names" -- "$cur"))
+			;;
+
+		status)
+			names=
+
+			for link in "$HOME/.bem/bin"/*; do
+				[[ -L $link ]] || continue
+
+				name=${link##*/}
+				[[ $name == bem ]] && continue
+
+				names+="$name "
+			done
+
+			for link in "$HOME/.bem/source"/*; do
+				[[ -L $link ]] || continue
+
+				name=${link##*/}
 				names+="$name "
 			done
 
@@ -121,9 +160,11 @@ EOF
 	    echo "bem initialized in $BEM_LINKS"
 	    echo 'add these lines to your .bashrc file for tab completion:'
         echo "  export PATH=\"$BEM_LINKS:\$PATH\""
+        echo "  for file in \"$BEM_SOURCES\"/*; do"
+        echo '      [[ -r $file ]] && source "$file"'
+        echo '  done'
 	    echo "  source \"$completion\""
 	    ;;
-
     install)
         [[ -d "$BEM_LINKS" ]] || die "bem is not initialized; run 'bem init'" 69 
 	    (($# > 0)) || die 'usage: bem install [-n name] file ...' 64
@@ -143,7 +184,7 @@ EOF
                 *)
                     file=$1
                     shift
-                    [[ -f $file && -r $file ]] || die "not a readable file: $file" 66
+                    [[ -f $file && -x $file ]] || die "not an executable file: $file" 66
                     path=$(realpath "$file") || die "could not resolve $file" 74
                     if [[ -z $name ]]; then
                         name=${path##*/}
@@ -153,7 +194,6 @@ EOF
                     link="$BEM_LINKS/$name"
                     [[ ! -e $link && ! -L $link ]] || die "already exists: $link" 69
                     type "$name" >/dev/null 2>&1 && die "command already exists: $name" 69
-                    [[ -x $path ]] || die "you don't have execution permission for $path" 74
                     ln -s "$path" "$link" || die "could not create $link" 73
                     echo "$name -> $path"
                     name=
@@ -177,11 +217,62 @@ EOF
 			echo "removed: $name"
         done
 	    ;;
-
+    source)
+        [[ -d "$BEM_SOURCES" ]] || die "bem is not initialized; run 'bem init'" 69 
+	    (($# > 0)) || die 'usage: bem source [-n name] file ...' 64
+        name=
+        file=
+        while (($# > 0)); do
+            case $1 in
+                -n)
+                    (($# > 1)) || die '-n requires a name' 64
+                    [[ -z $name ]] || die "-n '$name' requires a file" 64
+                    name=$2
+                    shift 2
+                    ;;
+                -*)
+                    die "unknown option: $1" 64
+                    ;;
+                *)
+                    file=$1
+                    shift
+                    [[ -f $file && -r $file ]] || die "not a readable file: $file" 66
+                    path=$(realpath "$file") || die "could not resolve $file" 74
+                    if [[ -z $name ]]; then
+                        name=${path##*/}
+                    fi
+                    [[ $name =~ $NAME_RE ]] || die "invalid name for source file: $name" 65
+                    ((${#name} <= NAME_MAX)) || die "name too long: $name" 65
+                    link="$BEM_SOURCES/$name"
+                    [[ ! -e $link && ! -L $link ]] || die "already exists: $link" 69
+                    ln -s "$path" "$link" || die "could not create $link" 73
+                    echo "$name -> $path"
+                    name=
+                    ;;
+            esac
+        done
+        [[ -z $name ]] || die '-n requires a file' 64
+        ;;
+    desource)
+        [[ -d "$BEM_SOURCES" ]] || die "bem is not initialized; run 'bem init'" 69 
+	    (($# > 0)) || die 'usage: bem desource name ...' 64
+	    for name in "$@"; do
+            if [[ ! $name =~ $NAME_RE ]]; then
+                die "invalid name for source file: $name" 65
+    		elif [[ ! -L "$BEM_SOURCES/$name" ]]; then
+	    	    die "not found: $name" 66
+            fi
+        done
+        for name in "$@"; do
+			rm -f "$BEM_SOURCES/$name" || die "could not remove $BEM_SOURCES/$name" 74
+			echo "removed: $name"
+        done
+	    ;;
     list|ls)
         [[ -d "$BEM_LINKS" ]] || die "bem is not initialized; run 'bem init'" 69 
 	    found=false
         code=0
+        echo 'Programs:'
     	for link in "$BEM_LINKS"/*; do
 		    if [[ -L $link ]]; then
                 if target=$(readlink "$link"); then
@@ -193,7 +284,21 @@ EOF
                 fi
             fi
 	    done
-	    $found || echo 'no plugins installed'
+	    $found || echo 'no program installed'
+        found=false
+        echo 'Source files:'
+    	for link in "$BEM_SOURCES"/*; do
+		    if [[ -L $link ]]; then
+                if target=$(readlink "$link"); then
+                    echo "${link##*/} -> $target"
+		            found=true
+                else
+                    echo "bem: could not read $link" >&2
+                    code=74
+                fi
+            fi
+	    done
+	    $found || echo 'no source file installed'
         exit "$code"
 	    ;;
     status)
@@ -201,21 +306,36 @@ EOF
 	    (($# > 0)) || die 'usage: bem status name ...' 64
         code=0
 	    for name in "$@"; do
-            link="$BEM_LINKS/$name"
             if [[ ! $name =~ $NAME_RE ]]; then
                 echo "bem: invalid name for program: $name" >&2
 	            code=65
-            elif [[ -L "$link" ]]; then
+                continue
+            fi
+            found=false
+            link="$BEM_LINKS/$name"
+            if [[ -L "$link" ]]; then
+                found=true
 			    if target=$(readlink "$link"); then
-                    echo "$name: '$link' -> '$target'"
+                    echo "Program $name: '$link' -> '$target'"
                 else
                     echo "bem: could not read symlink $link" >&2
                     code=74
                 fi
-            else
+            fi
+            link="$BEM_SOURCES/$name"
+            if [[ -L "$link" ]]; then
+                found=true
+			    if target=$(readlink "$link"); then
+                    echo "Source $name: '$link' -> '$target'"
+                else
+                    echo "bem: could not read symlink $link" >&2
+                    code=74
+                fi
+            fi
+            $found || {
                 echo "$name: not found" >&2
                 code=66
-            fi
+            }
         done
         exit "$code"
     	;;
@@ -223,7 +343,7 @@ EOF
         [[ -L "$BEM_LINKS/bem" ]] || die "bem is not initialized; run 'bem init'" 69 
         bem_file=$(readlink "$BEM_LINKS/bem") || die "could not read symlink $BEM_LINKS/bem" 74
         code=0
-        for link in "$BEM_LINKS"/*; do
+        for link in "$BEM_LINKS"/* "$BEM_SOURCES"/*; do
 		    if [[ -L $link ]]; then
                 rm -f "$link" || {
                     echo "bem: could not remove $link" >&2
@@ -235,7 +355,10 @@ EOF
         echo "bem uninstalled"
         echo "remove these lines from your .bashrc file, if present:"
 	    echo "  export PATH=\"$BEM_LINKS:\$PATH\""
-	    echo "  source \"$bem_dir/bem_completion\""
+        echo "  for file in \"$BEM_SOURCES\"/*; do"
+        echo '      [[ -r $file ]] && source "$file"'
+        echo '  done'
+        echo "  source \"$BEM_HOME/bem_completion\""
         exit "$code"
         ;;
     version|--version|-v)
